@@ -1,0 +1,44 @@
+{
+  "engineType": "turboprop",
+  "airProperties": {
+    "temperature": 255.65,
+    "pressure": 54020,
+    "density": 0.7361
+  },
+  "fuelProperties": {
+    "calorific": 43000000
+  },
+  "components": {
+    "propeller": {
+      "Phi": 4,
+      "efficiency": 0.88,
+      "gearbox_efficiency": 0.9,
+      "alpha_power": 0.85
+    },
+    "intake": {
+      "Phi": 0.7059,
+      "mach": 0.4334
+    },
+    "compressor": {
+      "pressure_ratio": 15,
+      "efficiency": 0.86,
+      "mechanical_efficiency": 0.95
+    },
+    "combustor": {
+      "outlet_temperature": 1300,
+      "efficiency": 0.98,
+      "mechanical_efficiency": 0.95
+    },
+    "turbineHigh": {
+      "efficiency": 0.92,
+      "mechanical_efficiency": 0.95
+    },
+    "turbineLow": {
+      "efficiency": 0.92,
+      "mechanical_efficiency": 0.95
+    },
+    "nozzle": {
+      "efficiency": 0.98
+    }
+  }
+}

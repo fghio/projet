@@ -1,0 +1,48 @@
+ /* ------------------------------ * ------------------------------ *\
+   ___                             |  
+  |  _ \ _ __ ___     | | ___| |_  |
+  | |_) | '__/ _ \ _  | |/ _ \ __| |
+  |  __/| | | (_) | |_| |  __/ |_  |
+  |_|   |_|  \___/ \___/ \___|\__| |
+                                   |
+ \* ------------------------------ * ------------------------------ */
+
+engineType turbojet;
+
+airProperties
+{
+    temperature 223;
+    pressure 26400;
+    density 0.413;
+}
+
+components
+{
+    intake
+    {
+        Phi 1;
+        mach 0.8;
+        efficiency 0.97;
+    }
+    compressor
+    {
+        pressure_ratio 15.0;
+        efficiency 0.88;
+        mechanical_efficiency 0.98;
+    }
+    combustor
+    {
+        outlet_temperature 1450;
+        efficiency 0.99;
+        mechanical_efficiency 0.95;
+    }
+    turbine
+    {
+        efficiency 0.92;
+        mechanical_efficiency 0.98;
+    }
+    nozzle
+    {
+        efficiency 0.97;
+    }
+}

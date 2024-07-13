@@ -1,0 +1,64 @@
+ /* ------------------------------ * ------------------------------ *\
+   ___                             |  
+  |  _ \ _ __ ___     | | ___| |_  |
+  | |_) | '__/ _ \ _  | |/ _ \ __| |
+  |  __/| | | (_) | |_| |  __/ |_  |
+  |_|   |_|  \___/ \___/ \___|\__| |
+                                   |
+ \* ------------------------------ * ------------------------------ */
+
+engineType turbofan_SF;
+
+airProperties
+{
+    temperature 223;
+    pressure 26400;
+    density 0.413;
+}
+
+components
+{
+    intake
+    {
+        Phi 3;
+        mach 0.8;
+        efficiency 0.97;
+    }
+    fan
+    {
+        BPR 9;
+        pressure_ratio 1.5;
+        efficiency 0.88;
+        mechanical_efficiency 0.98;        
+    }
+    compressor
+    {
+        pressure_ratio 10.0;
+        efficiency 0.88;
+        mechanical_efficiency 0.98;
+    }
+    combustor
+    {
+        outlet_temperature 1450;
+        efficiency 0.99;
+        mechanical_efficiency 0.95;
+    }
+    turbineHigh
+    {
+        efficiency 0.92;
+        mechanical_efficiency 0.98;
+    }
+    turbineLow
+    {
+        efficiency 0.92;
+        mechanical_efficiency 0.98;
+    }
+    nozzleMain
+    {
+        efficiency 1;
+    }
+    nozzleSecondary
+    {
+        efficiency 1;
+    }
+}
