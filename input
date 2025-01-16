@@ -1,4 +1,4 @@
-/* ------------------------------ * ------------------------------ *\
+b/* ------------------------------ * ------------------------------ *\
   ___                 _      _    |  
  |  _ \ _ __ ___     | | ___| |_  |
  | |_) | '__/ _ \ _  | |/ _ \ __| |
@@ -11,50 +11,50 @@ engineType turbofan_AF;
 
 airProperties
 {
-    temperature 223;
-    pressure 26400;
-    density 0.413;
+    temperature 218.8;
+    pressure 23842;
+    density 0.380;
 }
 
 components
 {
     intake
     {
-        Phi 0.9;
-        mach 0.8;
+        Phi 1.2;
+        mach 0.85;
         efficiency 0.97;
     }
     fan
     {
-        pressure_ratio 2.1;
-        efficiency 0.87;
-        mechanical_efficiency 0.91;
+        pressure_ratio 4.5;
+        efficiency 0.95;
+        mechanical_efficiency 0.97;
     }
     compressor
     {
-        pressure_ratio 6.0;
-        efficiency 0.89;
-        mechanical_efficiency 0.91;
+        pressure_ratio 6.5;
+        efficiency 0.96;
+        mechanical_efficiency 0.97;
     }
     combustor
     {
-        fuel_ratio 0.015;
-        efficiency 0.98;
-        mechanical_efficiency 0.93;
+        outlet_temperature 1540;
+        efficiency 0.99;
+        mechanical_efficiency 0.995;
     }
     turbineHigh
     {
-        efficiency 0.92;
-        mechanical_efficiency 0.93;
+        efficiency 0.97;
+        mechanical_efficiency 0.98;
     }
     turbineLow
     {
-        efficiency 0.93;
-        mechanical_efficiency 0.93;
+        efficiency 0.97;
+        mechanical_efficiency 0.99;
     }
     nozzle
     {
         onlyConvergent True;
-        efficiency 0.9;
+        efficiency 0.98;
     }
 }
