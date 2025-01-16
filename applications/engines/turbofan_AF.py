@@ -33,6 +33,7 @@ def simulate(config):
     air = Air(**air_properties)
     fuel = Fuel(**fuel_properties)
     hot_gas = HotGas(**hotGas_properties)
+    mixture = HotGas()
 
     # Create instances of Components
     intake = Intake(air=air, **config['components']['intake'])
