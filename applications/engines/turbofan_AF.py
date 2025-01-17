@@ -15,6 +15,7 @@ from src.components.intake import Intake
 from src.components.compressor import Compressor
 from src.components.combustor import Combustor
 from src.components.turbine import Turbine
+from src.components.postCombustor import PostCombustor
 from src.components.mixer import Mixer
 from src.components.nozzle import Nozzle
 
@@ -33,6 +34,7 @@ def simulate(config):
     air = Air(**air_properties)
     fuel = Fuel(**fuel_properties)
     hot_gas = HotGas(**hotGas_properties)
+    fuel_ab = Fuel(**fuel_properties)
     mixture = HotGas()
 
     # Create instances of Components
@@ -45,11 +47,16 @@ def simulate(config):
     mixer = Mixer(air=air, fuel=fuel, hotGas=hot_gas, mix=mixture)
     nozzle = Nozzle(air=air, hotGas=mixture, **config['components']['nozzle'])
 
+    if "postCombustor" in config["components"]:
+        postcomb_properties = config.get('postcombustionProperties', {})
+        postcomb = HotGas(**postcomb_properties)
+        postCombustor = PostCombustor(air=air, pre=hot_gas, combustor=combustor, fuel=fuel_ab, post=postcomb, **config['components']['postCombustor'])
+
     # Create instances of Performance
     performance = Performance(intake=intake, combustor=combustor, mainNozzle=nozzle)
 
     # Create instances of Write
-    write = Write(performance=performance,intake=intake,combustor=combustor,mainNozzle=nozzle,engineType="turbofan_AF")
+    write = Write(performance=performance,intake=intake,mainNozzle=nozzle,engineType="turbofan_AF")
 
     
     # Begin simulation
@@ -94,9 +101,19 @@ def simulate(config):
     # Mixer (mixing zone)
     mixer.updatePropertiesAfterMixing()
     P8_tot, T8_tot = mixer.evolve(T7_tot, T3_tot, P7_tot)
+
+    # PostCombustor:
+    if "postCombustor" in config["components"]:
+        P9_tot, T9_tot, f_ab = postCombustor.evolve(T8_tot, P8_tot)
+        hot_gas.gamma = postcomb.gamma
+        hot_gas.R = postcomb.R
+        hot_gas.cp = postcomb.cp
+    else:
+        P9_tot = P8_tot
+        T9_tot = T8_tot
     
     # Nozzle main
-    P9, T9 = nozzle.evolve(T8_tot, P8_tot)
+    P10, T10 = nozzle.evolve(T9_tot, P9_tot)
 
     # Calc performance
     performance.calcPerformance()
@@ -112,12 +129,17 @@ def simulate(config):
     write.writeStatus("Compressor",P4_tot,T4_tot)
     write.writeStatus("Combustor",P5_tot,T5_tot)
     
-    write.writeCombustorAdditionalProperties()
+    write.writeCombustorAdditionalProperties(combustor)
 
     write.writeStatus("Turbine HP",P6_tot,T6_tot)
     write.writeStatus("Turbine LP",P7_tot,T7_tot)
     write.writeStatus("Mixing zone",P8_tot,T8_tot)
-    write.writeStatus("Nozzle",P9,T9,total=False)
+    
+    if "postCombustor" in config["components"]:
+        write.writeStatus("PostCombustor",P9_tot,T9_tot)
+        write.writeCombustorAdditionalProperties(postCombustor)
+    
+    write.writeStatus("Nozzle",P10,T10,total=False)    
 
     write.writePerformance()
 

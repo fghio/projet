@@ -56,7 +56,7 @@ def simulate(config):
     performance = Performance(intake=intake, combustor=combustor, propeller=propeller, mainNozzle=nozzle)
 
     # Create instances of Write
-    write = Write(performance=performance,intake=intake,combustor=combustor,mainNozzle=nozzle,engineType="turboprop")
+    write = Write(performance=performance,intake=intake,mainNozzle=nozzle,engineType="turboprop")
 
 
     # Begin simulation
@@ -101,7 +101,7 @@ def simulate(config):
     write.writeStatus("Compressor",P3_tot,T3_tot)
     write.writeStatus("Combustor",P4_tot,T4_tot)
     
-    write.writeCombustorAdditionalProperties()
+    write.writeCombustorAdditionalProperties(combustor)
 
     write.writeStatus("Turbine HP",P5_tot,T5_tot)
     write.writeStatus("Turbine LP | Propeller",P6_tot,T6_tot)

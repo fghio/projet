@@ -15,6 +15,7 @@ from src.components.intake import Intake
 from src.components.compressor import Compressor
 from src.components.combustor import Combustor
 from src.components.turbine import Turbine
+from src.components.postCombustor import PostCombustor
 from src.components.nozzle import Nozzle
 
 from src.performance.performance import Performance
@@ -31,8 +32,9 @@ def simulate(config):
     # Create instances of Fluids
     air = Air(**air_properties)
     fuel = Fuel(**fuel_properties)
+    fuel_ab = Fuel(**fuel_properties)
     hot_gas = HotGas(**hotGas_properties)
-
+    
     # Create instances of Components
     intake = Intake(air=air, **config['components']['intake'])
     compressor = Compressor(air=air, **config['components']['compressor'])
@@ -40,11 +42,18 @@ def simulate(config):
     turbine = Turbine(compressor=compressor, combustor=combustor, **config['components']['turbine'])
     nozzle = Nozzle(air=air, hotGas=hot_gas, **config['components']['nozzle'])
 
+    kwargsPerf = {}
+    if "postCombustor" in config["components"]:
+        postcomb_properties = config.get('postcombustionProperties', {})
+        postcomb = HotGas(**postcomb_properties)
+        postCombustor = PostCombustor(air=air, pre=hot_gas, combustor=combustor, fuel=fuel_ab, post=postcomb, **config['components']['postCombustor'])
+        kwargsPerf["postCombustor"] = postCombustor
+
     # Create instances of Performance
-    performance = Performance(intake=intake, combustor=combustor, mainNozzle=nozzle)
+    performance = Performance(intake=intake, combustor=combustor, mainNozzle=nozzle, **kwargsPerf)
 
     # Create instances of Write
-    write = Write(performance=performance,intake=intake,combustor=combustor,mainNozzle=nozzle,engineType="turbojet")
+    write = Write(performance=performance,intake=intake,mainNozzle=nozzle,engineType="turbojet")
 
 
     # Begin simulation
@@ -65,8 +74,18 @@ def simulate(config):
     # Turbine
     P5_tot, T5_tot, T5_prime = turbine.evolve(T4_tot, P4_tot)
 
+    # PostCombustor:
+    if "postCombustor" in config["components"]:
+        P6_tot, T6_tot, f_ab = postCombustor.evolve(T5_tot, P5_tot)
+        hot_gas.gamma = postcomb.gamma
+        hot_gas.R = postcomb.R
+        hot_gas.cp = postcomb.cp
+    else:
+        P6_tot = P5_tot
+        T6_tot = T5_tot
+
     # Nozzle
-    P9, T9 = nozzle.evolve(T5_tot, P5_tot)
+    P9, T9 = nozzle.evolve(T6_tot, P6_tot)
 
     # Calc performance
     performance.calcPerformance()
@@ -75,15 +94,22 @@ def simulate(config):
     write.beginCycle()
 
     write.airConditions()
+
     write.writeStatus("Air at entrance",P1_tot,T1_tot)
 
     write.writeStatus("Intake",P2_tot,T2_tot)
+
     write.writeStatus("Compressor",P3_tot,T3_tot)
+
     write.writeStatus("Combustor",P4_tot,T4_tot)
-    
-    write.writeCombustorAdditionalProperties()
+    write.writeCombustorAdditionalProperties(combustor)
 
     write.writeStatus("Turbine HP",P5_tot,T5_tot)
+ 
+    if "postCombustor" in config["components"]:
+        write.writeStatus("PostCombustor",P6_tot,T6_tot)
+        write.writeCombustorAdditionalProperties(postCombustor)
+    
     write.writeStatus("Nozzle",P9,T9,total=False)
 
     write.writePerformance()
