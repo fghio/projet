@@ -1,5 +1,7 @@
 import numpy as np
 
+from src.fluids.fuel import Fuel
+
 from src.components.intake import Intake
 from src.components.nozzle import Nozzle
 from src.components.combustor import Combustor
@@ -11,12 +13,17 @@ class Performance:
         intake : Intake,
         combustor : Combustor,
         mainNozzle : Nozzle,
+        postCombustor : Combustor = None,
         secondNozzle : Nozzle = None,
         propeller : Propeller = None
     ):
         self.intake = intake
         self.combustor = combustor
         self.mainNozzle = mainNozzle
+        if postCombustor is not None:
+            self.postCombustor = postCombustor 
+        else: 
+            self.postCombustor = Combustor(air=Fuel(),fuel=Fuel(),hotGas=Fuel())
         self.secondNozzle = secondNozzle
         self.propeller = propeller
         self.thrust = 0     # [N]
@@ -43,7 +50,7 @@ class Performance:
          self   
     ):
         # T_overall = (dot{m}_{a,H} + dot{m}_{f}) u_{e,H} + dot{m}_{a,C} u_{e,C} - (dot{m}_{a,H} + dot{m}_{a,C}) u_{in} + 0 (perfect expansion)
-        self.thrust = (self.intake.air.mass_flow_main + self.combustor.fuel.mass_fuel) * self.mainNozzle.outlet_velocity \
+        self.thrust = (self.intake.air.mass_flow_main + self.combustor.fuel.mass_fuel + self.postCombustor.fuel.mass_fuel) * self.mainNozzle.outlet_velocity \
             - (self.intake.air.mass_flow_main + self.intake.air.mass_flow_secondary) * self.intake.inlet_velocity
 
         if self.secondNozzle is not None:
@@ -55,7 +62,7 @@ class Performance:
 
         if self.mainNozzle.onlyConvergent == True:
             # contribution for the pressure difference (p_e != p_amb)
-            nozzle_outlet_area = (self.mainNozzle.air.mass_flow_main + self.mainNozzle.air.mass_flow_secondary + self.combustor.fuel.mass_fuel) \
+            nozzle_outlet_area = (self.mainNozzle.air.mass_flow_main + self.mainNozzle.air.mass_flow_secondary + self.combustor.fuel.mass_fuel + self.postCombustor.fuel.mass_fuel) \
                 * self.mainNozzle.hotGas.R * self.mainNozzle.static_temperature \
                 / (self.mainNozzle.outlet_velocity * self.mainNozzle.static_pressure)
             self.thrust += (self.mainNozzle.static_pressure - self.mainNozzle.air.pressure)*nozzle_outlet_area
@@ -64,12 +71,12 @@ class Performance:
         self.impulse = self.thrust / (self.intake.air.mass_flow_main+self.intake.air.mass_flow_secondary)
 
         # TSFC =  dot{m}_{f} / T
-        self.TSFC = self.combustor.fuel.mass_fuel / self.thrust 
+        self.TSFC = (self.combustor.fuel.mass_fuel + self.postCombustor.fuel.mass_fuel) / self.thrust 
 
         # calculate power(s)
-        self.availablePower = self.combustor.fuel.mass_fuel * self.combustor.fuel.calorific
+        self.availablePower = self.combustor.fuel.mass_fuel * self.combustor.fuel.calorific + self.postCombustor.fuel.mass_fuel * self.combustor.fuel.calorific
         self.propulsivePower = self.thrust * self.intake.inlet_velocity
-        self.dissipatedPower = 0.5 * (self.intake.air.mass_flow_main + self.combustor.fuel.mass_fuel) * (self.mainNozzle.outlet_velocity - self.intake.inlet_velocity) ** 2 
+        self.dissipatedPower = 0.5 * (self.intake.air.mass_flow_main + self.combustor.fuel.mass_fuel + self.postCombustor.fuel.mass_fuel) * (self.mainNozzle.outlet_velocity - self.intake.inlet_velocity) ** 2 
 
         if self.secondNozzle is not None:
             # turbofan separated fluxes
