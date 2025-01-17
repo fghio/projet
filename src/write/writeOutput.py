@@ -1,5 +1,4 @@
 from src.components.intake import Intake
-from src.components.combustor import Combustor
 from src.components.nozzle import Nozzle
 from src.performance.performance import Performance
 
@@ -9,7 +8,6 @@ class Write:
         self,
         performance : Performance,
         intake : Intake,
-        combustor : Combustor,
         mainNozzle : Nozzle,
         secondaryNozzle : Nozzle = None,
         engineType = ""
@@ -17,7 +15,6 @@ class Write:
         self.tab = "  "
         self.performance = performance
         self.intake = intake
-        self.combustor = combustor
         self.mainNozzle = mainNozzle
         self.secondaryNozzle = secondaryNozzle
         self.engineType = engineType
@@ -74,10 +71,11 @@ class Write:
 
 
     def writeCombustorAdditionalProperties(
-        self
+        self,
+        combustor
     ):
-        print(self.tab,f"Fuel Ratio        = {self.combustor.fuel_ratio:.4f}")
-        print(self.tab,f"Fuel mass         = {self.combustor.fuel.mass_fuel:.2f} kg/s")
+        print(self.tab,f"Fuel Ratio        = {combustor.fuel_ratio:.4f}")
+        print(self.tab,f"Fuel mass         = {combustor.fuel.mass_fuel:.2f} kg/s")
 
 
     def writePerformance(
