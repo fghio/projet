@@ -16,6 +16,13 @@ airProperties
     density 0.380;
 }
 
+postcombustionProperties
+{
+    gamma 1.3;
+    cp 1243;
+    R 286.6;
+}
+
 components
 {
     intake
@@ -52,9 +59,15 @@ components
         efficiency 0.97;
         mechanical_efficiency 0.99;
     }
+    postCombustor
+    {
+        fuel_ratio 0.032;
+        efficiency 0.98;
+        mechanical_efficiency 0.93;
+    }
     nozzle
     {
-        onlyConvergent True;
+        //onlyConvergent True;
         efficiency 0.98;
     }
 }

@@ -47,13 +47,15 @@ def simulate(config):
     mixer = Mixer(air=air, fuel=fuel, hotGas=hot_gas, mix=mixture)
     nozzle = Nozzle(air=air, hotGas=mixture, **config['components']['nozzle'])
 
+    kwargsPerf = {}
     if "postCombustor" in config["components"]:
         postcomb_properties = config.get('postcombustionProperties', {})
         postcomb = HotGas(**postcomb_properties)
         postCombustor = PostCombustor(air=air, pre=hot_gas, combustor=combustor, fuel=fuel_ab, post=postcomb, **config['components']['postCombustor'])
+        kwargsPerf["postCombustor"] = postCombustor
 
     # Create instances of Performance
-    performance = Performance(intake=intake, combustor=combustor, mainNozzle=nozzle)
+    performance = Performance(intake=intake, combustor=combustor, mainNozzle=nozzle, **kwargsPerf)
 
     # Create instances of Write
     write = Write(performance=performance,intake=intake,mainNozzle=nozzle,engineType="turbofan_AF")
