@@ -16,6 +16,13 @@ airProperties
     density 0.413;
 }
 
+postcombustionProperties
+{
+    gamma 1.3;
+    cp 1243;
+    R 286.6;
+}
+
 components
 {
     intake
