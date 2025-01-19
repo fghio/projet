@@ -24,9 +24,7 @@ class Mixer:
         self.mix.cp = ( hotGassesMas * self.hotGas.cp + self.air.mass_flow_secondary * self.air.cp ) / overallMass
         self.mix.gamma = ( hotGassesMas * self.hotGas.gamma + self.air.mass_flow_secondary * self.air.gamma ) / overallMass
         self.mix.cv = ( hotGassesMas * self.hotGas.cv + self.air.mass_flow_secondary * self.air.cv ) / overallMass
-
-        print(self.mix.cp, self.mix.gamma, self.mix.cv)
-
+        self.mix.R = ( hotGassesMas * self.hotGas.R + self.air.mass_flow_secondary * self.air.R ) / overallMass
 
     def evolve(
         self,
