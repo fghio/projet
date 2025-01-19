@@ -51,7 +51,7 @@ def simulate(config):
     if "postCombustor" in config["components"]:
         postcomb_properties = config.get('postcombustionProperties', {})
         postcomb = HotGas(**postcomb_properties)
-        postCombustor = PostCombustor(air=air, pre=hot_gas, combustor=combustor, fuel=fuel_ab, post=postcomb, **config['components']['postCombustor'])
+        postCombustor = PostCombustor(air=air, pre=mixture, combustor=combustor, fuel=fuel_ab, post=postcomb, compressor=fan, **config['components']['postCombustor'])
         kwargsPerf["postCombustor"] = postCombustor
 
     # Create instances of Performance
@@ -107,9 +107,9 @@ def simulate(config):
     # PostCombustor:
     if "postCombustor" in config["components"]:
         P9_tot, T9_tot, f_ab = postCombustor.evolve(T8_tot, P8_tot)
-        hot_gas.gamma = postcomb.gamma
-        hot_gas.R = postcomb.R
-        hot_gas.cp = postcomb.cp
+        mixture.gamma = postcomb.gamma
+        mixture.R = postcomb.R
+        mixture.cp = postcomb.cp
     else:
         P9_tot = P8_tot
         T9_tot = T8_tot
