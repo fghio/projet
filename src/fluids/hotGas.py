@@ -1,7 +1,7 @@
 class HotGas:
     def __init__(
         self, 
-        cp = 1155,
+        cp = 1133,
         gamma=1.33, 
         R=286.58
     ):
