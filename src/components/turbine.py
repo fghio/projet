@@ -32,7 +32,7 @@ class Turbine:
 
         # Solve ideal temperature
         outlet_temperature_ideal = inlet_temperature + (outlet_temperature_real - inlet_temperature) / self.efficiency
-        
+
         # Solve pressure
         outlet_pressure = inlet_pressure * (outlet_temperature_ideal / inlet_temperature) ** (self.combustor.hotGas.gamma / (self.combustor.hotGas.gamma - 1))
 
