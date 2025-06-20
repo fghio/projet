@@ -56,16 +56,25 @@ class Performance:
         if self.secondNozzle is not None:
             # turbofan separated fluxes
             self.thrust += self.intake.air.mass_flow_secondary * self.secondNozzle.outlet_velocity
+
+            if self.mainNozzle.onlyConvergent == True:
+                nozzle_outlet_area = (self.intake.air.mass_flow_main + self.combustor.fuel.mass_fuel) / (self.mainNozzle.outlet_velocity * (self.mainNozzle.static_pressure / (self.mainNozzle.hotGas.R * self.mainNozzle.static_temperature) ) )
+                self.thrust += (self.secondNozzle.static_pressure - self.intake.air.pressure)*nozzle_outlet_area
+
+            if self.secondNozzle.onlyConvergent == True:
+                nozzle_outlet_area = self.intake.air.mass_flow_secondary / (self.secondNozzle.outlet_velocity * (self.secondNozzle.static_pressure / (self.intake.air.R * self.secondNozzle.static_temperature) ) )
+                self.thrust += (self.secondNozzle.static_pressure - self.intake.air.pressure)*nozzle_outlet_area
+
         else:
             # turbofan associated fluxes
             self.thrust += self.intake.air.mass_flow_secondary * self.mainNozzle.outlet_velocity
 
-        if self.mainNozzle.onlyConvergent == True:
-            # contribution for the pressure difference (p_e != p_amb)
-            nozzle_outlet_area = (self.mainNozzle.air.mass_flow_main + self.mainNozzle.air.mass_flow_secondary + self.combustor.fuel.mass_fuel + self.postCombustor.fuel.mass_fuel) \
-                * self.mainNozzle.hotGas.R * self.mainNozzle.static_temperature \
-                / (self.mainNozzle.outlet_velocity * self.mainNozzle.static_pressure)
-            self.thrust += (self.mainNozzle.static_pressure - self.mainNozzle.air.pressure)*nozzle_outlet_area
+            if self.mainNozzle.onlyConvergent == True:
+                # contribution for the pressure difference (p_e != p_amb)
+                nozzle_outlet_area = (self.mainNozzle.air.mass_flow_main + self.mainNozzle.air.mass_flow_secondary + self.combustor.fuel.mass_fuel + self.postCombustor.fuel.mass_fuel) \
+                    * self.mainNozzle.hotGas.R * self.mainNozzle.static_temperature \
+                    / (self.mainNozzle.outlet_velocity * self.mainNozzle.static_pressure)
+                self.thrust += (self.mainNozzle.static_pressure - self.mainNozzle.air.pressure)*nozzle_outlet_area
 
         # I = T / (dot{m}_{a,H} + dot{m}_{a,C})
         self.impulse = self.thrust / (self.intake.air.mass_flow_main+self.intake.air.mass_flow_secondary)
