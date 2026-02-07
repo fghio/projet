@@ -2,6 +2,8 @@ import json
 import importlib
 import os
 
+from src.write.exerciseText import generate_exercise_text, generate_data_section
+
 def parse_value(value):
     try:
         # Attempt to convert the value to a float, then to an int if applicable
@@ -101,4 +103,9 @@ if __name__ == "__main__":
         config_file = 'config.json'
         config = load_config(config_file)
         run_engine(config)
+
+        exercise_text = generate_exercise_text(config)
+        print(exercise_text)
+        exercise_data = generate_data_section(config)
+        print(exercise_data)
 
