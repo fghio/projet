@@ -34,7 +34,7 @@ class Nozzle:
     ):
         if static_outlet_temperature > inlet_temperature:
             error="The code stopped with the following error:\n"
-            error+="T_static_out < T_static_inlet | Not acceptable. Check engine properties"
+            error+="T_static_out > T_total_inlet: the nozzle inlet pressure is below ambient | Not acceptable. Check engine properties"
             raise Exception(error)
 
         self.outlet_velocity = np.sqrt(2.0 * self.hotGas.cp * (inlet_temperature-static_outlet_temperature))
@@ -63,10 +63,14 @@ class Nozzle:
 
         if self.onlyConvergent == True:
             # convergent nozzle
-            self.static_pressure = inlet_pressure * (((self.hotGas.gamma+1)*self.efficiency - self.hotGas.gamma + 1) \
+            critical_pressure = inlet_pressure * (((self.hotGas.gamma+1)*self.efficiency - self.hotGas.gamma + 1) \
                 /((self.hotGas.gamma+1)*self.efficiency))**(self.hotGas.gamma/(self.hotGas.gamma - 1))
 
-            self.static_temperature = inlet_temperature * (2/(self.hotGas.gamma + 1))
+            # choked only if the critical pressure is above ambient; otherwise
+            # the flow expands to ambient pressure and the exit is subsonic
+            if critical_pressure > self.air.pressure:
+                self.static_pressure = critical_pressure
+                self.static_temperature = inlet_temperature * (2/(self.hotGas.gamma + 1))
 
         outlet_velocity = self.calcOutletV(inlet_temperature,self.static_temperature)
         sound_speed = np.sqrt(self.hotGas.gamma * self.hotGas.R * self.static_temperature)

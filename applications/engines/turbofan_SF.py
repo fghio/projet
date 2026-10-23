@@ -108,6 +108,8 @@ def simulate(config):
 
     write.endCycle()
 
+    return write.results
+
 
 
 

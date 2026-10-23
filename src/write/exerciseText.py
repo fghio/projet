@@ -1,16 +1,19 @@
+
 def generate_exercise_text(config):
 
     engine = config["engineType"]
     air = config["airProperties"]
-    intake = config["components"]["intake"]
+    comps = config["components"]
+    intake = comps["intake"]
 
-    has_postcomb = "postCombustor" in config["components"]
-    is_mixed = engine == "turbofan_mixed"
+    has_postcomb = "postCombustor" in comps
+    is_mixed = engine == "turbofan_AF"
 
     engine_name = {
         "turbojet": "turbojet",
-        "turbofan": "turbofan",
-        "turbofan_mixed": "turbofan a flussi associati"
+        "turbofan_SF": "turbofan a flussi separati",
+        "turbofan_AF": "turbofan a flussi associati",
+        "turboprop": "turboelica"
     }[engine]
 
     postcomb_text = " dotato di post-combustore" if has_postcomb else ""
@@ -21,9 +24,26 @@ def generate_exercise_text(config):
         if is_mixed else ""
     )
 
+    if engine == "turboprop":
+        prop = comps["propeller"]
+        propeller_text = (
+            f"L’elica ha un diametro di {prop['Phi']} m"
+            + (f" e assorbe una frazione α = {prop['alpha_power']} del salto entalpico disponibile"
+               if "alpha_power" in prop else
+               "; si determini la ripartizione ottima del salto entalpico tra elica e getto")
+            + ".\n\n"
+        )
+    else:
+        propeller_text = ""
+
     bpr_text = " il BPR," if is_mixed else ""
 
-    perf_text = (
+    if engine == "turboprop":
+        perf_text = "(la potenza all’albero, la spinta complessiva, il consumo specifico BSFC ed i rendimenti)"
+    else:
+        perf_text = "(la spinta del motore, il suo consumo specifico ed i rendimenti)"
+
+    condition_text = (
         "nelle condizioni di post-combustore spento e di post-combustore acceso"
         if has_postcomb else
         "nelle condizioni operative assegnate"
@@ -39,11 +59,9 @@ Il velivolo si trova a volare in regime subsonico (Mach = {intake['mach']}).
 Si supponga la sezione di cattura del flusso d’aria coincidente con la sezione di ingresso
 della presa d’aria, il cui diametro è di {intake['Phi']} m.
 
-{mixing_text}
-Considerando i dati di seguito forniti, il candidato dimensioni il propulsore del sistema,
+{mixing_text}{propeller_text}Considerando i dati di seguito forniti, il candidato dimensioni il propulsore del sistema,
 identificando i punti del ciclo termodinamico da esso realizzato, le portate di aria e
-combustibile elaborate,{bpr_text} e le prestazioni del motore (la spinta del motore,
-il suo consumo specifico ed i rendimenti) {perf_text}.
+combustibile elaborate,{bpr_text} e le prestazioni del motore {perf_text} {condition_text}.
 """
     return text.strip()
 
@@ -63,6 +81,10 @@ def generate_data_section(config):
         lines.append(
             f"Rapporto di compressione del fan:\t\t\tβf = {comps['fan']['pressure_ratio']}"
         )
+        if engine == "turbofan_SF":
+            lines.append(
+                f"Rapporto di by-pass:\t\t\t\tBPR = {comps['fan']['BPR']}"
+            )
 
     if "compressor" in comps:
         lines.append(
@@ -102,7 +124,12 @@ def generate_data_section(config):
     lines.append("\nRendimenti:")
 
     intake = comps["intake"]
-    lines.append(f"• rendimento pneumatico della presa d’aria\t\tπd = {intake['efficiency']}")
+    lines.append(f"• rendimento pneumatico della presa d’aria\t\tπd = {intake.get('efficiency', 1.0)}")
+
+    if "propeller" in comps:
+        prop = comps["propeller"]
+        lines.append(f"• dell’elica:\t\t\t\t\tηp = {prop.get('efficiency', 1.0)}")
+        lines.append(f"• del riduttore:\t\t\t\tηgb = {prop.get('gearbox_efficiency', 1.0)}")
 
     if "fan" in comps:
         fan = comps["fan"]
@@ -132,8 +159,12 @@ def generate_data_section(config):
         lines.append(f"• adiabatico della turbina:\t\t\tηt = {turb['efficiency']}")
         lines.append(f"• meccanico della turbina:\t\t\tηm = {turb['mechanical_efficiency']}")
 
-    noz = comps["nozzle"]
-    lines.append(f"• adiabatico dell’ugello:\t\t\tηu = {noz['efficiency']}")
+    if "nozzle" in comps:
+        noz = comps["nozzle"]
+        lines.append(f"• adiabatico dell’ugello:\t\t\tηu = {noz['efficiency']}")
+    else:
+        lines.append(f"• adiabatico dell’ugello primario:\t\tηu,H = {comps['nozzleMain']['efficiency']}")
+        lines.append(f"• adiabatico dell’ugello secondario:\t\tηu,C = {comps['nozzleSecondary']['efficiency']}")
 
     if "postCombustor" in comps:
         lines.append(f"• efficienza di combustione in post-combustore:\tηAB = {ab['efficiency']}")
@@ -160,8 +191,8 @@ def generate_data_section(config):
 
     if "postCombustor" in comps:
         lines.append(
-            f"• Miscela uscente dal post-combustore: cp = {post['cp']} J/kgK, "
-            f"γ = {post['gamma']}, R = {post['R']} J/kgK"
+            f"• Miscela uscente dal post-combustore: cp = {post.get('cp', 1155)} J/kgK, "
+            f"γ = {post.get('gamma', 1.33)}, R = {post.get('R', 286.58)} J/kgK"
         )
 
     # -------------------
@@ -173,4 +204,3 @@ def generate_data_section(config):
     )
 
     return "\n".join(lines)
-

@@ -9,3 +9,21 @@
 
 Still missing:
 - Extend convergent only nozzle to separated fluxes
+
+Graphical interface:
+    python3 projetGUI.py            (opens http://127.0.0.1:8050 in the browser)
+    python3 projetGUI.py --port 9000 --no-browser
+  Requires flask and plotly (pip install flask plotly); works offline.
+  - edit inputs per component, results update live
+  - engine schematic coloured by temperature, T-s diagram, station table (CSV export)
+  - p/T profiles, energy balance (Sankey), parametric sweeps, baseline comparison
+  - exam mode (hides results) and exam text generation
+  - import/export of the OpenFOAM-like input files
+  - inputs and results are checked (gui/validation.py): errors block the run,
+    warnings flag values outside the usual range; the CLI prints the same messages
+
+Tests:
+    python3 -m pytest
+  tests/test_projet.py re-derives every component equation from the solver output,
+  checks the ideal Brayton cycle, first/second law, mode round-trips, scaling,
+  hundreds of random engines, the input validation and the GUI API.

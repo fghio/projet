@@ -59,7 +59,7 @@ class Performance:
 
             if self.mainNozzle.onlyConvergent == True:
                 nozzle_outlet_area = (self.intake.air.mass_flow_main + self.combustor.fuel.mass_fuel) / (self.mainNozzle.outlet_velocity * (self.mainNozzle.static_pressure / (self.mainNozzle.hotGas.R * self.mainNozzle.static_temperature) ) )
-                self.thrust += (self.secondNozzle.static_pressure - self.intake.air.pressure)*nozzle_outlet_area
+                self.thrust += (self.mainNozzle.static_pressure - self.intake.air.pressure)*nozzle_outlet_area
 
             if self.secondNozzle.onlyConvergent == True:
                 nozzle_outlet_area = self.intake.air.mass_flow_secondary / (self.secondNozzle.outlet_velocity * (self.secondNozzle.static_pressure / (self.intake.air.R * self.secondNozzle.static_temperature) ) )

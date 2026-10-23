@@ -111,6 +111,8 @@ def simulate(config):
 
     write.endCycle()
 
+    return write.results
+
 
 
 if __name__ == "__main__":

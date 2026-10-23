@@ -3,8 +3,14 @@ import importlib
 import os
 
 from src.write.exerciseText import generate_exercise_text, generate_data_section
+from gui.validation import validate_inputs
 
 def parse_value(value):
+    # booleans (e.g. "onlyConvergent True;")
+    if value in ("True", "true"):
+        return True
+    if value in ("False", "false"):
+        return False
     try:
         # Attempt to convert the value to a float, then to an int if applicable
         float_value = float(value)
@@ -79,7 +85,7 @@ def load_config(config_file):
 def run_engine(config):
     engine_type = config['engineType']
     engine_module = importlib.import_module(f"applications.engines.{engine_type}")
-    engine_module.simulate(config)
+    return engine_module.simulate(config)
 
 
 if __name__ == "__main__":
@@ -102,6 +108,11 @@ if __name__ == "__main__":
 
         config_file = 'config.json'
         config = load_config(config_file)
+
+        # report questionable or wrong inputs before running
+        for issue in validate_inputs(config):
+            print(f"{issue['level'].upper():8s}{'.'.join(map(str, issue['path']))}: {issue['message']}")
+
         run_engine(config)
 
         exercise_text = generate_exercise_text(config)

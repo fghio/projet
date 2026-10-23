@@ -19,6 +19,9 @@ class Write:
         self.secondaryNozzle = secondaryNozzle
         self.engineType = engineType
 
+        # structured copy of everything printed (used by the GUI)
+        self.results = {"engineType": engineType, "stations": []}
+
 
     def beginCycle(
         self
@@ -35,6 +38,10 @@ class Write:
         print()
 
         massFlowTotal = self.intake.air.mass_flow_main + self.intake.air.mass_flow_secondary
+
+        self.results["inlet_velocity"] = self.intake.inlet_velocity
+        self.results["mass_flow_main"] = self.intake.air.mass_flow_main
+        self.results["mass_flow_secondary"] = self.intake.air.mass_flow_secondary
         
         if self.engineType != "turboprop":
             print(f"Air Mass Flow: {massFlowTotal:.2f} kg/s")
@@ -64,6 +71,13 @@ class Write:
             keyPressure += " static"
             keyTemperature += " static"
 
+        self.results["stations"].append({
+            "name": componentName,
+            "pressure": pressure,
+            "temperature": temperature,
+            "total": total
+        })
+
         print("----------------------------------------")
         print(f"Output from {componentName}:")
         print(self.tab,f"{keyPressure}    = {pressure/1000:.2f} kPa")
@@ -74,6 +88,9 @@ class Write:
         self,
         combustor
     ):
+        self.results["stations"][-1]["fuel_ratio"] = combustor.fuel_ratio
+        self.results["stations"][-1]["fuel_mass"] = combustor.fuel.mass_fuel
+
         print(self.tab,f"Fuel Ratio        = {combustor.fuel_ratio:.4f}")
         print(self.tab,f"Fuel mass         = {combustor.fuel.mass_fuel:.2f} kg/s")
 
@@ -81,6 +98,37 @@ class Write:
     def writePerformance(
         self,
     ):
+        perf = self.performance
+        self.results["performance"] = {
+            "thrust": perf.thrust,
+            "impulse": perf.impulse,
+            "TSFC": perf.TSFC,
+            "thermal": perf.thermalPerformance,
+            "propulsive": perf.propulsivePerformance,
+            "global": perf.globalPerformance,
+            "availablePower": perf.availablePower,
+            "propulsivePower": perf.propulsivePower,
+            "dissipatedPower": perf.dissipatedPower
+        }
+        self.results["mainNozzle"] = {
+            "mach": self.mainNozzle.mach,
+            "velocity": self.mainNozzle.outlet_velocity,
+            "onlyConvergent": self.mainNozzle.onlyConvergent
+        }
+        if self.secondaryNozzle is not None:
+            self.results["secondaryNozzle"] = {
+                "mach": self.secondaryNozzle.mach,
+                "velocity": self.secondaryNozzle.outlet_velocity,
+                "onlyConvergent": self.secondaryNozzle.onlyConvergent
+            }
+        if perf.propeller is not None:
+            self.results["propeller"] = {
+                "alpha_power": perf.propeller.alpha_power,
+                "shaft_power": perf.propeller.power,
+                "air_mass": perf.propeller.air_mass,
+                "velocity": perf.propeller.propeller_velocity
+            }
+
         print("----------------------------------------")
         print()
         print("Performance:")
@@ -97,7 +145,7 @@ class Write:
 
         if self.engineType == "turbofan_SF":
             machString = f"Mach secondary nozzle = {self.secondaryNozzle.mach:.2f}"
-            if self.mainNozzle.mach > 1:
+            if self.secondaryNozzle.mach > 1.01:
                 machString += " (Conv-div required)"
 
             print(self.tab,machString)       

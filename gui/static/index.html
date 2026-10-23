@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProJet · Engine Cycle Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M3 12h6l4-4h10l6 4v8l-6 4H13l-4-4H3z' fill='%233b82f6'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/vendor/plotly.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" class="logo" aria-hidden="true"><path d="M3 12h6l4-4h10l6 4v8l-6 4H13l-4-4H3z"/></svg>
+      <div>
+        <div class="brand-name">ProJet</div>
+        <div class="brand-sub">Engine cycle studio</div>
+      </div>
+    </div>
+
+    <nav class="engine-switch" id="engineSwitch" aria-label="Engine type"></nav>
+
+    <div class="actions">
+      <button class="btn ghost" id="btnPreset" title="Reload the reference case for this engine">↺ Preset</button>
+      <label class="btn ghost" title="Load an OpenFOAM-style ProJet input file">
+        ⇪ Import<input type="file" id="fileImport" hidden>
+      </label>
+      <button class="btn ghost" id="btnExport" title="Download the current setup as a ProJet input file">⇩ Export input</button>
+      <button class="btn ghost" id="btnBaseline" title="Freeze the current results to compare against">📌 Set baseline</button>
+      <label class="switch" title="Hide results so you can solve the exercise first">
+        <input type="checkbox" id="examMode"><span class="track"></span><span>Exam mode</span>
+      </label>
+      <button class="btn icon ghost" id="btnTheme" title="Toggle light / dark theme">◐</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <h2>Inputs</h2>
+        <span class="run-state" id="runState">ready</span>
+      </div>
+      <div id="form"></div>
+      <p class="hint">Results update automatically as you type. Empty fields use the solver default (shown in grey).</p>
+    </aside>
+
+    <main class="main">
+      <div id="banner" class="banner" hidden></div>
+
+      <section class="kpis sol" id="kpis"></section>
+
+      <section class="card">
+        <div class="card-head">
+          <h3>Engine schematic</h3>
+          <div class="legend sol">
+            <span id="tmin">–</span>
+            <span class="heatbar"></span>
+            <span id="tmax">–</span>
+            <span class="muted">T [K]</span>
+          </div>
+        </div>
+        <div class="schematic sol" id="schematic"></div>
+        <p class="hint">Click a component to edit its inputs · hover a station to read its state.</p>
+      </section>
+
+      <section class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3>T–s diagram</h3>
+            <span class="muted small">s referred to ambient static conditions</span>
+          </div>
+          <div id="tsPlot" class="plot sol"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>Cycle stations</h3>
+            <button class="btn small ghost" id="btnCsv">⇩ CSV</button>
+          </div>
+          <div class="table-wrap sol"><table id="stations"></table></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="tabs" id="tabs">
+          <button data-tab="profiles" class="active">p &amp; T along the engine</button>
+          <button data-tab="energy">Energy balance</button>
+          <button data-tab="sweep">Parametric sweep</button>
+          <button data-tab="exam">Exam text</button>
+          <button data-tab="console">Console</button>
+        </div>
+
+        <div class="tab-panel active" data-panel="profiles">
+          <div id="profilePlot" class="plot sol"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="energy">
+          <div class="energy sol">
+            <div id="sankeyPlot" class="plot"></div>
+            <div class="eff-chain" id="effChain"></div>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel="sweep">
+          <div class="sweep-controls">
+            <label>Parameter <select id="sweepParam"></select></label>
+            <label>From <input type="number" id="sweepFrom" step="any"></label>
+            <label>To <input type="number" id="sweepTo" step="any"></label>
+            <label>Points <input type="number" id="sweepN" value="25" min="3" max="200"></label>
+            <button class="btn primary" id="btnSweep">Run sweep</button>
+          </div>
+          <div class="grid-2 tight sol">
+            <div id="sweepPlot1" class="plot"></div>
+            <div id="sweepPlot2" class="plot"></div>
+          </div>
+          <p class="hint sol" id="sweepNote">All other inputs are held at their current values. Points where the cycle is not physical are skipped.</p>
+        </div>
+
+        <div class="tab-panel" data-panel="exam">
+          <div class="exam-head">
+            <p class="muted">Exercise statement generated from the current inputs. Switch on <b>Exam mode</b> to hide results while you work out the solution.</p>
+            <div class="row">
+              <button class="btn small ghost" data-copy="examText">Copy text</button>
+              <button class="btn small ghost" id="btnExamDownload">⇩ Download with solution</button>
+            </div>
+          </div>
+          <pre class="exam" id="examText"></pre>
+          <h4>Data</h4>
+          <pre class="exam" id="examData"></pre>
+        </div>
+
+        <div class="tab-panel" data-panel="console">
+          <pre class="console sol" id="console"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <button class="reveal" id="btnReveal" hidden>👁 Reveal solution</button>
+  <div class="tooltip" id="tooltip" hidden></div>
+
+  <script src="/static/schema.js"></script>
+  <script src="/static/schematic.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
