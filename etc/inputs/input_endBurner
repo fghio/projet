@@ -1,0 +1,65 @@
+/* ------------------------------ * ------------------------------ *\
+  ___                 _      _    |  
+ |  _ \ _ __ ___     | | ___| |_  |
+ | |_) | '__/ _ \ _  | |/ _ \ __| |
+ |  __/| | | (_) | |_| |  __/ |_  |
+ |_|   |_|  \___/ \___/ \___|\__| |
+                                  |
+\* ------------------------------ * ------------------------------ */
+
+engineType endBurner;
+
+flightConditions
+{
+    altitude_km 0;
+}
+
+ambientProperties
+{
+//  Pa (0 = vacuum)
+    pressure 101325;
+}
+
+hotGasProperties
+{
+//  common to all layers unless a layer gives its own gamma, R (cp = gamma R/(gamma-1) if omitted)
+    gamma 1.2;
+    R 320;
+}
+
+components
+{
+    grain
+    {
+//      cigarette grain: only the face towards the nozzle burns, constant burn area pi D^2/4
+        diameter 0.2;
+//      layers from the nozzle side (layer1, burns first) towards the head end
+//      burn rate r = a p^n with r in mm/s and p in MPa
+        layer1
+        {
+//          boost
+            length 0.1;
+            density 1750;
+            flame_temperature 3000;
+            burn_rate_coefficient 12;
+            burn_rate_exponent 0.4;
+        }
+        layer2
+        {
+//          sustain, with its own combustion products
+            length 0.4;
+            density 1700;
+            flame_temperature 2800;
+            burn_rate_coefficient 5;
+            burn_rate_exponent 0.35;
+            gamma 1.22;
+            R 330;
+        }
+    }
+    nozzle
+    {
+        throat_diameter 0.02;
+        area_ratio 3.5;
+        efficiency 0.98;
+    }
+}

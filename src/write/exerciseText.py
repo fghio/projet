@@ -1,7 +1,13 @@
 
+ROCKET_TYPES = ["idealRocket", "solidRocket", "endBurner"]
+
+
 def generate_exercise_text(config):
 
     engine = config["engineType"]
+    if engine in ROCKET_TYPES:
+        return generate_rocket_exercise_text(config)
+
     air = config["airProperties"]
     comps = config["components"]
     intake = comps["intake"]
@@ -73,6 +79,8 @@ def generate_data_section(config):
 
     comps = config["components"]
     engine = config["engineType"]
+    if engine in ROCKET_TYPES:
+        return generate_rocket_data_section(config)
 
     # -------------------
     # Rapporti di compressione
@@ -202,5 +210,188 @@ def generate_data_section(config):
     lines.append(
         f"\nPotere calorifico del combustibile:\t\tLHV = {fuel.get('calorific', 42e6)} J/kg"
     )
+
+    return "\n".join(lines)
+
+
+def ambient_text(config):
+    p_a = config.get("ambientProperties", {}).get("pressure", 0)
+    altitude = config.get("flightConditions", {}).get("altitude_km")
+    if p_a <= 0:
+        return "nel vuoto"
+    if altitude is None:
+        altitude_text = ""
+    elif altitude == 0:
+        altitude_text = " al livello del mare"
+    else:
+        altitude_text = f" alla quota di {altitude} km"
+    return f"in un ambiente a pressione {p_a} Pa{altitude_text}"
+
+
+def generate_rocket_exercise_text(config):
+
+    if config["engineType"] == "solidRocket":
+        return generate_solid_rocket_exercise_text(config)
+    if config["engineType"] == "endBurner":
+        return generate_end_burner_exercise_text(config)
+
+    comps = config["components"]
+    chamber = comps["chamber"]
+    nozzle = comps["nozzle"]
+    p_a = config.get("ambientProperties", {}).get("pressure", 0)
+
+    if "area_ratio" in nozzle:
+        nozzle_text = (f"L’ugello convergente-divergente ha un rapporto d’espansione Ae/At = {nozzle['area_ratio']} "
+                       f"e scarica {ambient_text(config)}.")
+        ratio_task = ""
+    else:
+        nozzle_text = f"L’ugello convergente-divergente è adattato e scarica {ambient_text(config)}."
+        ratio_task = " il rapporto d’espansione dell’ugello,"
+
+    if "thrust" in chamber:
+        sizing_text = f"Il motore deve fornire una spinta di {chamber['thrust'] / 1000:g} kN."
+        size_task = " la portata di propellente necessaria"
+    elif "mass_flow" in chamber:
+        sizing_text = f"Il motore elabora una portata di propellente di {chamber['mass_flow']} kg/s."
+        size_task = " la spinta"
+    else:
+        sizing_text = f"La gola dell’ugello ha un diametro di {chamber['throat_diameter']} m."
+        size_task = " la portata di propellente, la spinta"
+
+    split_task = ", ripartita tra ossidante e combustibile," if "mixture_ratio" in chamber else ","
+    vacuum_task = " sia nelle condizioni assegnate sia nel vuoto" if p_a > 0 else ""
+
+    text = f"""
+Un endoreattore opera con una pressione in camera di combustione di {chamber['pressure'] / 1e6:g} MPa
+e una temperatura dei prodotti di combustione di {chamber['temperature']} K.
+{nozzle_text}
+{sizing_text}
+
+Considerando i dati di seguito forniti, il candidato determini la velocità caratteristica c*,
+le condizioni in gola e all’uscita dell’ugello,{ratio_task}{size_task}{split_task}
+i diametri di gola e di uscita, il coefficiente di spinta e l’impulso specifico{vacuum_task}.
+"""
+    return text.strip()
+
+
+def generate_solid_rocket_exercise_text(config):
+
+    grain = config["components"]["grain"]
+    nozzle = config["components"]["nozzle"]
+    ends_text = ("con le facce di estremità inibite" if grain.get("inhibited_ends")
+                 else "con le facce di estremità libere di bruciare")
+
+    text = f"""
+Un endoreattore a propellente solido ha un grano di tipo BATES composto da {grain['segments']} segmenti
+cilindrici con perforazione circolare, di diametro esterno {grain['outer_diameter']} m, diametro della
+perforazione {grain['core_diameter']} m e lunghezza {grain['segment_length']} m ciascuno, con la superficie
+esterna inibita (incollata al case) e {ends_text}.
+L’ugello convergente-divergente ha una gola di diametro {nozzle['throat_diameter']} m, un rapporto
+d’espansione Ae/At = {nozzle['area_ratio']} e scarica {ambient_text(config)}.
+
+Considerando i dati di seguito forniti e trascurando i transitori di accensione e di spegnimento,
+il candidato determini l’andamento nel tempo della superficie di combustione, della pressione in
+camera e della spinta, il tempo di combustione, la pressione massima e media, la spinta media e
+massima, l’impulso totale, la massa di propellente e l’impulso specifico medio.
+"""
+    return text.strip()
+
+
+LAYER_NAMES = ["primo", "secondo", "terzo", "quarto", "quinto", "sesto"]
+
+
+def generate_end_burner_exercise_text(config):
+
+    from src.rocket.grain import layerBlocks
+    grain = config["components"]["grain"]
+    nozzle = config["components"]["nozzle"]
+    layers = layerBlocks(grain)
+    n = len(layers)
+    lengths = ", ".join(f"{layer['length']} m" for _, layer in layers)
+
+    if n == 1:
+        layers_text = f"un unico propellente, per una lunghezza di {lengths}"
+        task_text = "la pressione in camera, la velocità di regressione, la spinta, il tempo di combustione"
+    else:
+        layers_text = (f"{n} strati di propellenti diversi, disposti in sequenza a partire dal lato ugello "
+                       f"(il primo strato a bruciare è quello affacciato all’ugello), di lunghezza rispettivamente {lengths}")
+        task_text = ("per ciascuna fase di combustione la pressione in camera, la velocità di regressione, "
+                     "la portata, la spinta e la durata, e complessivamente il tempo di combustione")
+
+    text = f"""
+Un endoreattore a propellente solido ha un grano a sigaretta (a combustione frontale) di diametro
+{grain['diameter']} m, con la superficie laterale inibita: brucia solo la faccia rivolta verso l’ugello.
+Il grano è composto da {layers_text}.
+L’ugello convergente-divergente ha una gola di diametro {nozzle['throat_diameter']} m, un rapporto
+d’espansione Ae/At = {nozzle['area_ratio']} e scarica {ambient_text(config)}.
+
+Considerando i dati di seguito forniti, nell’ipotesi di regime quasi stazionario (passaggio
+istantaneo da uno strato al successivo, transitori trascurabili), il candidato determini
+{task_text}, l’impulso totale, la massa di propellente e l’impulso specifico medio,
+tracciando l’andamento nel tempo della pressione in camera e della spinta.
+"""
+    return text.strip()
+
+
+def generate_rocket_data_section(config):
+
+    lines = []
+
+    if config["engineType"] == "endBurner":
+        from src.rocket.grain import layerBlocks
+        hot = config.get("hotGasProperties", {})
+        for i, (name, layer) in enumerate(layerBlocks(config["components"]["grain"])):
+            title = f"Strato {i + 1}" + (" (lato ugello)" if i == 0 else "")
+            lines.append(f"{title}:")
+            lines.append(f"• lunghezza:\t\t\t\t\tL = {layer['length']} m")
+            lines.append(f"• densità del propellente:\t\t\tρp = {layer['density']} kg/m³")
+            lines.append(f"• temperatura di fiamma:\t\t\tTc = {layer['flame_temperature']} K")
+            lines.append(f"• legge di combustione r = a·pⁿ (mm/s, MPa):\ta = {layer['burn_rate_coefficient']}, n = {layer['burn_rate_exponent']}")
+            gamma, R = layer.get("gamma", hot.get("gamma")), layer.get("R", hot.get("R"))
+            lines.append(f"• prodotti di combustione:\t\t\tγ = {gamma}, R = {R} J/kgK")
+            lines.append("")
+        lines.append(f"Pressione ambiente:\t\t\t\tpa = {config.get('ambientProperties', {}).get('pressure', 0)} Pa")
+        lines.append("\nRendimenti:")
+        lines.append(f"• adiabatico dell’ugello:\t\t\tηu = {config['components']['nozzle'].get('efficiency', 1.0)}")
+        return "\n".join(lines)
+
+    if config["engineType"] == "solidRocket":
+        prop = config["propellantProperties"]
+        lines.append(f"Densità del propellente:\t\t\tρp = {prop['density']} kg/m³")
+        lines.append(f"Temperatura di fiamma:\t\t\t\tTc = {prop['flame_temperature']} K")
+        lines.append(f"Legge di combustione:\t\t\t\tr = a·pⁿ  (r in mm/s, p in MPa)")
+        lines.append(f"\t\t\t\t\t\ta = {prop['burn_rate_coefficient']}, n = {prop['burn_rate_exponent']}")
+        lines.append(f"Pressione ambiente:\t\t\t\tpa = {config.get('ambientProperties', {}).get('pressure', 0)} Pa")
+        lines.append("\nRendimenti:")
+        lines.append(f"• adiabatico dell’ugello:\t\t\tηu = {config['components']['nozzle'].get('efficiency', 1.0)}")
+        hot = config.get("hotGasProperties", {})
+        lines.append("\nProprietà dei prodotti di combustione:")
+        gas_text = f"• γ = {hot.get('gamma')}, R = {hot.get('R')} J/kgK"
+        if "cp" in hot:
+            gas_text += f", cp = {hot['cp']} J/kgK"
+        lines.append(gas_text)
+        return "\n".join(lines)
+
+    comps = config["components"]
+    chamber = comps["chamber"]
+    nozzle = comps["nozzle"]
+
+    lines.append(f"Pressione in camera di combustione:\t\tpc = {chamber['pressure']} Pa")
+    lines.append(f"Temperatura in camera di combustione:\t\tTc = {chamber['temperature']} K")
+    if "mixture_ratio" in chamber:
+        lines.append(f"Rapporto di miscela ossidante/combustibile:\tO/F = {chamber['mixture_ratio']}")
+    if "area_ratio" in nozzle:
+        lines.append(f"Rapporto d’espansione dell’ugello:\t\tε = {nozzle['area_ratio']}")
+    lines.append(f"Pressione ambiente:\t\t\t\tpa = {config.get('ambientProperties', {}).get('pressure', 0)} Pa")
+
+    lines.append("\nRendimenti:")
+    lines.append(f"• adiabatico dell’ugello:\t\t\tηu = {nozzle.get('efficiency', 1.0)}")
+
+    hot = config.get("hotGasProperties", {})
+    lines.append("\nProprietà dei prodotti di combustione:")
+    gas_text = f"• γ = {hot.get('gamma')}, R = {hot.get('R')} J/kgK"
+    if "cp" in hot:
+        gas_text += f", cp = {hot['cp']} J/kgK"
+    lines.append(gas_text)
 
     return "\n".join(lines)

@@ -1,0 +1,47 @@
+/* ------------------------------ * ------------------------------ *\
+  ___                 _      _    |  
+ |  _ \ _ __ ___     | | ___| |_  |
+ | |_) | '__/ _ \ _  | |/ _ \ __| |
+ |  __/| | | (_) | |_| |  __/ |_  |
+ |_|   |_|  \___/ \___/ \___|\__| |
+                                  |
+\* ------------------------------ * ------------------------------ */
+
+engineType idealRocket;
+
+flightConditions
+{
+    altitude_km 0;
+}
+
+ambientProperties
+{
+//  Pa (0 = vacuum)
+    pressure 101325;
+}
+
+hotGasProperties
+{
+//  LOX/RP-1 products: molar mass ~ 22 kg/kmol; cp = gamma R/(gamma-1) if omitted
+    gamma 1.22;
+    R 378;
+}
+
+components
+{
+    chamber
+    {
+        pressure 7e6;
+        temperature 3500;
+//      O/F (optional): splits the propellant mass flow
+        mixture_ratio 2.3;
+//      size with one of: thrust [N], mass_flow [kg/s], throat_diameter [m]
+        thrust 800e3;
+    }
+    nozzle
+    {
+//      Ae/At (omit for a nozzle adapted to ambient pressure)
+        area_ratio 16;
+        efficiency 0.98;
+    }
+}

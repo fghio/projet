@@ -1,0 +1,58 @@
+/* ------------------------------ * ------------------------------ *\
+  ___                 _      _    |  
+ |  _ \ _ __ ___     | | ___| |_  |
+ | |_) | '__/ _ \ _  | |/ _ \ __| |
+ |  __/| | | (_) | |_| |  __/ |_  |
+ |_|   |_|  \___/ \___/ \___|\__| |
+                                  |
+\* ------------------------------ * ------------------------------ */
+
+engineType solidRocket;
+
+flightConditions
+{
+    altitude_km 0;
+}
+
+ambientProperties
+{
+//  Pa (0 = vacuum)
+    pressure 101325;
+}
+
+propellantProperties
+{
+//  AP/HTPB composite
+    density 1750;
+    flame_temperature 3200;
+//  burn rate r = a p^n with r in mm/s and p in MPa
+    burn_rate_coefficient 3.54;
+    burn_rate_exponent 0.35;
+}
+
+hotGasProperties
+{
+//  molar mass ~ 25 kg/kmol; cp = gamma R/(gamma-1) if omitted
+    gamma 1.18;
+    R 333;
+}
+
+components
+{
+    grain
+    {
+//      BATES: cylindrical segments with a circular port, outer surface bonded to the case
+        segments 4;
+        outer_diameter 0.3;
+        core_diameter 0.1;
+//      (3 D + d)/2 = 0.5 m: same burn area at ignition and burnout (burning ends)
+        segment_length 0.5;
+        inhibited_ends False;
+    }
+    nozzle
+    {
+        throat_diameter 0.067;
+        area_ratio 10;
+        efficiency 0.98;
+    }
+}
