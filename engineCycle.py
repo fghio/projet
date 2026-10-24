@@ -3,7 +3,7 @@ import importlib
 import os
 
 from src.write.exerciseText import generate_exercise_text, generate_data_section
-from gui.validation import validate_inputs
+from gui.validation import validate_inputs, ROCKET_TYPES
 
 def parse_value(value):
     # booleans (e.g. "onlyConvergent True;")
@@ -84,7 +84,8 @@ def load_config(config_file):
 # run the corresponding engine type
 def run_engine(config):
     engine_type = config['engineType']
-    engine_module = importlib.import_module(f"applications.engines.{engine_type}")
+    family = "rockets" if engine_type in ROCKET_TYPES else "engines"
+    engine_module = importlib.import_module(f"applications.{family}.{engine_type}")
     return engine_module.simulate(config)
 
 
