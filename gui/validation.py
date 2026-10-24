@@ -9,6 +9,8 @@ physically questionable or outside the usual range for this kind of engine.
 import math
 
 ENGINE_TYPES = ["turbojet", "turbofan_SF", "turbofan_AF", "turboprop"]
+# endoreactors: not shown by the GUI yet
+ROCKET_TYPES = ["idealRocket", "solidRocket", "endBurner"]
 
 # stoichiometric fuel/air ratio of hydrocarbon (kerosene-like) fuels
 F_STOICH = 0.068
@@ -102,14 +104,17 @@ def validate_inputs(config):
         return issues
 
     engine = config.get("engineType")
-    if engine not in ENGINE_TYPES:
-        issues.error(f"Unknown engineType '{engine}'. Available: {', '.join(ENGINE_TYPES)}.", "engineType")
+    if engine not in ENGINE_TYPES + ROCKET_TYPES:
+        issues.error(f"Unknown engineType '{engine}'. Available: {', '.join(ENGINE_TYPES + ROCKET_TYPES)}.", "engineType")
         return issues
 
     comps = config.get("components")
     if not isinstance(comps, dict):
         issues.error("The 'components' section is missing.", "components")
         return issues
+
+    if engine in ROCKET_TYPES:
+        return _validate_rocket_inputs(config, issues)
 
     _check_structure(config, engine, issues)
     if issues.has_errors:
@@ -483,8 +488,11 @@ def tidy(issues):
 
 
 def check_results(config, results):
-    issues = Issues()
     engine = config["engineType"]
+    if engine in ROCKET_TYPES:
+        return _check_rocket_results(config, results)
+
+    issues = Issues()
     comps = config["components"]
     p0 = config["airProperties"]["pressure"]
     st = {s["name"]: s for s in results["stations"]}
@@ -578,4 +586,464 @@ def check_results(config, results):
     elif perf["thermal"] <= 0:
         issues.warning("Thermal efficiency ≤ 0: the cycle does not convert fuel energy into jet kinetic energy.")
 
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Rockets (endoreactors)
+# ---------------------------------------------------------------------------
+ROCKET_COMPONENT_KEYS = {
+    "idealRocket": {
+        "chamber": {"pressure", "temperature", "mixture_ratio", "thrust", "mass_flow", "throat_diameter"},
+        "nozzle": {"efficiency", "area_ratio"},
+    },
+    "solidRocket": {
+        "grain": {"segments", "outer_diameter", "core_diameter", "segment_length", "inhibited_ends"},
+        "nozzle": {"throat_diameter", "area_ratio", "efficiency"},
+    },
+    "endBurner": {
+        "grain": {"diameter"},          # plus the layer1, layer2, ... blocks
+        "nozzle": {"throat_diameter", "area_ratio", "efficiency"},
+    },
+}
+PROPELLANT_KEYS = {"density", "flame_temperature", "burn_rate_coefficient", "burn_rate_exponent"}
+LAYER_KEYS = PROPELLANT_KEYS | {"length", "gamma", "R", "cp"}
+ROCKET_SECTION_KEYS = {
+    "idealRocket": {
+        "ambientProperties": {"pressure"},
+        "hotGasProperties": {"cp", "gamma", "R"},
+        "flightConditions": {"altitude_km"},
+    },
+    "solidRocket": {
+        "ambientProperties": {"pressure"},
+        "hotGasProperties": {"cp", "gamma", "R"},
+        "propellantProperties": PROPELLANT_KEYS,
+        "flightConditions": {"altitude_km"},
+    },
+    "endBurner": {
+        "ambientProperties": {"pressure"},
+        "hotGasProperties": {"cp", "gamma", "R"},
+        "flightConditions": {"altitude_km"},
+    },
+}
+ROCKET_SIZING_KEYS = ("thrust", "mass_flow", "throat_diameter")
+
+
+def critical_pressure_ratio(g):
+    """p*/p_c of a choked throat"""
+    return (2 / (g + 1)) ** (g / (g - 1))
+
+
+def _check_rocket_structure(config, engine, issues):
+    comps = config["components"]
+    sections, components = ROCKET_SECTION_KEYS[engine], ROCKET_COMPONENT_KEYS[engine]
+
+    for key, value in config.items():
+        if key in ("engineType", "components"):
+            continue
+        if key not in sections:
+            issues.warning(f"Section '{key}' is not used by a {engine} and is ignored.", key)
+            continue
+        if not isinstance(value, dict):
+            issues.error(f"Section '{key}' must contain parameters.", key)
+            continue
+        for k, v in value.items():
+            if k not in sections[key]:
+                issues.error(f"Unknown parameter '{k}' in '{key}' (allowed: {', '.join(sorted(sections[key]))}).", key, k)
+            elif not is_number(v):
+                issues.error(f"'{key}.{k}' must be a finite number (got {v!r}).", key, k)
+
+    for name in components:
+        if not isinstance(comps.get(name), dict):
+            issues.error(f"The {name} ('{name}') is required for a {engine}.", "components", name)
+    for name, block in comps.items():
+        if name not in components:
+            issues.warning(f"Component '{name}' is not part of a {engine} and is ignored.", "components", name)
+            continue
+        if not isinstance(block, dict):
+            continue
+        for k, v in block.items():
+            if engine == "endBurner" and name == "grain" and k.startswith("layer"):
+                _check_layer_structure(k, v, issues)
+                continue
+            if k not in components[name]:
+                issues.error(f"Unknown parameter '{k}' for the {name} "
+                             f"(allowed: {', '.join(sorted(components[name]))}).", "components", name, k)
+            elif k == "inhibited_ends":
+                if not isinstance(v, bool) and v not in (0, 1):
+                    issues.error(f"'{name}.inhibited_ends' must be True or False (got {v!r}).", "components", name, k)
+            elif not is_number(v):
+                issues.error(f"'{name}.{k}' must be a finite number (got {v!r}).", "components", name, k)
+
+
+def _check_layer_structure(name, block, issues):
+    P = ("components", "grain", name)
+    if not name[5:].isdigit() or int(name[5:]) < 1:
+        issues.error(f"Grain layers are named layer1, layer2, ... (got '{name}').", *P)
+        return
+    if not isinstance(block, dict):
+        issues.error(f"Layer '{name}' must contain parameters.", *P)
+        return
+    for k, v in block.items():
+        if k not in LAYER_KEYS:
+            issues.error(f"Unknown parameter '{k}' for {name} (allowed: {', '.join(sorted(LAYER_KEYS))}).", *P, k)
+        elif not is_number(v):
+            issues.error(f"'{name}.{k}' must be a finite number (got {v!r}).", *P, k)
+
+
+def _check_rocket_gas(config, issues):
+    """combustion products: γ and R depend on the propellants, there is no sensible default"""
+    gas = config.get("hotGasProperties", {})
+    H = ("hotGasProperties",)
+    _check_gas_values(issues, gas, {k: H + (k,) for k in ("gamma", "R", "cp")}, "the combustion products")
+
+
+def _check_gas_values(issues, gas, paths, name):
+    """gas: γ, R and optionally cp; paths: where each value comes from (for the messages)"""
+    for key, label in (("gamma", "γ"), ("R", "gas constant R [J/(kg·K)]")):
+        if gas.get(key) is None:
+            issues.error(f"The {label} of {name} is required for a rocket "
+                         "(e.g. LOX/RP-1: γ ≈ 1.22, R ≈ 380 J/(kg·K)).", *paths[key])
+    if issues.has_errors:
+        return
+    g, R = gas["gamma"], gas["R"]
+    if g <= 1:
+        issues.error(f"γ of {name} must be greater than 1.", *paths["gamma"])
+    elif not 1.1 <= g <= 1.4:
+        issues.warning(f"γ = {g:g} is unusual for rocket combustion products (typically 1.15–1.3).", *paths["gamma"])
+    if R <= 0:
+        issues.error(f"R of {name} must be positive.", *paths["R"])
+    elif not 250 <= R <= 900:
+        issues.warning(f"R = {R:g} J/(kg·K) means a molar mass of {8314.46 / R:.1f} kg/kmol, unusual for rocket "
+                       "combustion products (≈ 10–30 kg/kmol).", *paths["R"])
+    if gas.get("cp") is not None and g > 1 and R > 0:
+        cp_from_gamma = g * R / (g - 1)
+        if gas["cp"] <= R:
+            issues.error(f"cp of {name} must be larger than R.", *paths["cp"])
+        elif abs(cp_from_gamma - gas["cp"]) / gas["cp"] > 0.03:
+            issues.warning(f"cp, γ and R of {name} are not consistent: γR/(γ−1) = {cp_from_gamma:.0f} "
+                           f"J/(kg·K) vs cp = {gas['cp']:g} J/(kg·K).", *paths["cp"])
+
+
+def _check_flame_temperature(issues, T, *path):
+    if T <= 0:
+        issues.error("The combustion temperature must be positive (in kelvin).", *path)
+    elif not 1500 <= T <= 4000:
+        issues.warning(f"Combustion temperature {T:g} K is outside the usual range of rocket propellants (1500–4000 K).", *path)
+
+
+def _check_ideal_chamber(config, issues):
+    chamber = config["components"]["chamber"]
+    C = ("components", "chamber")
+    for key, unit in (("pressure", "Pa"), ("temperature", "K")):
+        if key not in chamber:
+            issues.error(f"The chamber {key} [{unit}] is required.", *C, key)
+    if issues.has_errors:
+        return
+    p_c = chamber["pressure"]
+    if p_c <= 0:
+        issues.error("The chamber pressure must be positive.", *C, "pressure")
+    elif p_c < 1e4:
+        issues.error(f"Chamber pressure {p_c:g} Pa is too low: the pressure must be given in Pa, not MPa or bar.", *C, "pressure")
+    elif not 3e5 <= p_c <= 3.5e7:
+        issues.warning(f"Chamber pressure {p_c / 1e6:g} MPa is outside the usual range (0.3–35 MPa).", *C, "pressure")
+    _check_flame_temperature(issues, chamber["temperature"], *C, "temperature")
+
+    sizing = [k for k in ROCKET_SIZING_KEYS if k in chamber]
+    if not sizing:
+        issues.error("Size the engine with one of: thrust [N], mass_flow [kg/s] or throat_diameter [m].", *C)
+    elif len(sizing) > 1:
+        issues.error(f"Give only one of thrust, mass_flow, throat_diameter (got {', '.join(sizing)}).", *C, sizing[1])
+    else:
+        if chamber[sizing[0]] <= 0:
+            issues.error(f"The {sizing[0].replace('_', ' ')} must be positive.", *C, sizing[0])
+
+    if "mixture_ratio" in chamber:
+        of = chamber["mixture_ratio"]
+        if of <= 0:
+            issues.error("The mixture ratio O/F must be positive.", *C, "mixture_ratio")
+        elif of > 10:
+            issues.warning(f"O/F = {of:g} is very high (≈ 2–3 for LOX/RP-1, 5–6 for LOX/LH2, 8 for N2O).", *C, "mixture_ratio")
+
+
+def _check_propellant(config, issues):
+    _check_propellant_block(config.get("propellantProperties", {}), ("propellantProperties",), issues)
+
+
+def _check_propellant_block(prop, P, issues):
+    labels = {"density": "density [kg/m³]", "flame_temperature": "flame temperature [K]",
+              "burn_rate_coefficient": "burn rate coefficient a [mm/s, p in MPa]", "burn_rate_exponent": "pressure exponent n"}
+    for key, label in labels.items():
+        if key not in prop:
+            issues.error(f"The propellant {label} is required.", *P, key)
+    if issues.has_errors:
+        return
+    rho = prop["density"]
+    if rho <= 0:
+        issues.error("The propellant density must be positive.", *P, "density")
+    elif not 1000 <= rho <= 2000:
+        issues.warning(f"Propellant density {rho:g} kg/m³ is unusual (≈ 1600–1850 for composites, 1550–1650 for double base).",
+                       *P, "density")
+    _check_flame_temperature(issues, prop["flame_temperature"], *P, "flame_temperature")
+    a = prop["burn_rate_coefficient"]
+    if a <= 0:
+        issues.error("The burn rate coefficient must be positive.", *P, "burn_rate_coefficient")
+    elif a < 0.1 or a > 100:
+        issues.warning(f"a = {a:g} mm/s at 1 MPa is far from usual propellants (≈ 1–20 mm/s): the law is r[mm/s] = a·p[MPa]ⁿ.",
+                       *P, "burn_rate_coefficient")
+    n = prop["burn_rate_exponent"]
+    if n < 0:
+        issues.error("The pressure exponent n must be ≥ 0.", *P, "burn_rate_exponent")
+    elif n >= 1:
+        issues.error(f"With n = {n:g} ≥ 1 the motor has no stable operating pressure: the pressure diverges.", *P, "burn_rate_exponent")
+    elif n > 0.7:
+        issues.warning(f"n = {n:g} is high: the chamber pressure is very sensitive to Kn (typically 0.2–0.5).", *P, "burn_rate_exponent")
+
+
+def _check_grain(config, issues):
+    grain = config["components"]["grain"]
+    nozzle = config["components"]["nozzle"]
+    G = ("components", "grain")
+    labels = {"segments": "number of segments", "outer_diameter": "outer diameter [m]",
+              "core_diameter": "core diameter [m]", "segment_length": "segment length [m]"}
+    for key, label in labels.items():
+        if key not in grain:
+            issues.error(f"The grain {label} is required.", *G, key)
+    if issues.has_errors:
+        return
+    N, D, d, L = grain["segments"], grain["outer_diameter"], grain["core_diameter"], grain["segment_length"]
+    if N < 1 or N != int(N):
+        issues.error(f"The number of segments must be a positive integer (got {N:g}).", *G, "segments")
+    if D <= 0:
+        issues.error("The grain outer diameter must be positive.", *G, "outer_diameter")
+    if d <= 0:
+        issues.error("The core diameter must be positive (BATES grains have a port).", *G, "core_diameter")
+    elif D > 0 and d >= D:
+        issues.error(f"The core diameter ({d:g} m) must be smaller than the outer diameter ({D:g} m).", *G, "core_diameter")
+    if L <= 0:
+        issues.error("The segment length must be positive.", *G, "segment_length")
+    if issues.has_errors:
+        return
+    if D > 5:
+        issues.warning(f"Outer diameter {D:g} m is in metres? It is larger than any existing motor (≈ 3.7 m).", *G, "outer_diameter")
+    if not grain.get("inhibited_ends") and L < (D - d):
+        issues.info("The segments are short: they burn out along the length before the port reaches the case.", *G, "segment_length")
+
+    Dt = nozzle.get("throat_diameter")
+    if is_number(Dt) and Dt > 0:
+        ratio = d ** 2 / Dt ** 2
+        if ratio <= 1:
+            issues.error(f"The port area is not larger than the throat area (Ap/At = {ratio:.2f}): the flow would choke in "
+                         "the port. Enlarge the core or reduce the throat.", *G, "core_diameter")
+        elif ratio < 2:
+            issues.warning(f"Initial port-to-throat area ratio Ap/At = {ratio:.2f} < 2: high port velocity, erosive burning "
+                           "(not modelled) would raise the initial pressure.", *G, "core_diameter")
+
+
+def _check_rocket_nozzle(config, engine, issues):
+    nozzle = config["components"]["nozzle"]
+    N = ("components", "nozzle")
+    _efficiency(issues, nozzle, "nozzle", "efficiency", "Adiabatic efficiency", 0.85)
+    p_a = config.get("ambientProperties", {}).get("pressure", 0)
+    if p_a < 0:
+        issues.error("The ambient pressure must be ≥ 0 (0 = vacuum).", "ambientProperties", "pressure")
+
+    if engine in ("solidRocket", "endBurner"):
+        if "throat_diameter" not in nozzle:
+            issues.error("The nozzle throat diameter [m] is required.", *N, "throat_diameter")
+        elif nozzle["throat_diameter"] <= 0:
+            issues.error("The throat diameter must be positive.", *N, "throat_diameter")
+        if "area_ratio" not in nozzle:
+            issues.error("Give the area ratio Ae/At: the chamber pressure changes during the burn, so the nozzle "
+                         "cannot stay adapted.", *N, "area_ratio")
+
+    if "area_ratio" in nozzle:
+        eps = nozzle["area_ratio"]
+        if eps <= 1:
+            issues.error(f"The area ratio Ae/At must be > 1 for a convergent-divergent nozzle (got {eps:g}).", *N, "area_ratio")
+        elif eps > 300:
+            issues.warning(f"Area ratio {eps:g} is beyond existing nozzles (≈ 300 for upper stages).", *N, "area_ratio")
+    elif p_a == 0 and engine == "idealRocket":
+        issues.error("In vacuum an adapted nozzle would be infinitely long: give the area ratio Ae/At.", *N, "area_ratio")
+
+
+def _check_end_burner(config, issues):
+    from src.rocket.grain import layerBlocks
+    grain, nozzle = config["components"]["grain"], config["components"]["nozzle"]
+    G = ("components", "grain")
+    common = config.get("hotGasProperties", {})
+    layers = layerBlocks(grain)
+    if not layers:
+        issues.error("Give at least one grain layer (layer1 { ... }), starting from the nozzle side.", *G)
+        return
+    for name, layer in layers:
+        L = G + (name,)
+        if "length" not in layer:
+            issues.error(f"The length [m] of {name} is required.", *L, "length")
+        elif layer["length"] <= 0:
+            issues.error(f"The length of {name} must be positive.", *L, "length")
+        _check_propellant_block(layer, L, issues)
+        # γ and R of the layer, or the common ones
+        gas, paths = {}, {}
+        for k in ("gamma", "R", "cp"):
+            own = k in layer or (k == "cp" and ("gamma" in layer or "R" in layer))
+            gas[k] = layer.get(k) if own else common.get(k)
+            paths[k] = L + (k,) if own or k not in common else ("hotGasProperties", k)
+        _check_gas_values(issues, gas, paths, f"the products of {name}")
+
+    if "diameter" not in grain:
+        issues.error("The grain diameter [m] is required.", *G, "diameter")
+        return
+    D = grain["diameter"]
+    if D <= 0:
+        issues.error("The grain diameter must be positive.", *G, "diameter")
+    elif D > 5:
+        issues.warning(f"Grain diameter {D:g} m is in metres? It is larger than any existing motor (≈ 3.7 m).", *G, "diameter")
+    Dt = nozzle.get("throat_diameter")
+    if D > 0 and is_number(Dt) and Dt > 0 and Dt >= D:
+        issues.error(f"The throat ({Dt:g} m) must be smaller than the grain diameter ({D:g} m): Kn = Ab/At ≤ 1.",
+                     "components", "nozzle", "throat_diameter")
+
+
+def _validate_rocket_inputs(config, issues):
+    engine = config["engineType"]
+    _check_rocket_structure(config, engine, issues)
+    if issues.has_errors:
+        return issues
+
+    if engine == "endBurner":
+        _check_end_burner(config, issues)
+        _check_rocket_nozzle(config, engine, issues)
+        alt = config.get("flightConditions", {}).get("altitude_km")
+        if alt is not None and alt < 0:
+            issues.warning(f"Altitude {alt:g} km is negative.", "flightConditions", "altitude_km")
+        return issues
+
+    _check_rocket_gas(config, issues)
+    if issues.has_errors:
+        return issues
+    if engine == "idealRocket":
+        _check_ideal_chamber(config, issues)
+    else:
+        _check_propellant(config, issues)
+        _check_grain(config, issues)
+    _check_rocket_nozzle(config, engine, issues)
+
+    g = config["hotGasProperties"]["gamma"]
+    p_a = config.get("ambientProperties", {}).get("pressure", 0)
+    if engine == "idealRocket" and not issues.has_errors and p_a > 0:
+        p_c = config["components"]["chamber"]["pressure"]
+        critical = critical_pressure_ratio(g)
+        if p_a >= p_c * critical:
+            issues.error(f"The ambient pressure is above the critical pressure ({p_c * critical:g} Pa): the throat is "
+                         "not choked and the rocket model does not apply. Raise the chamber pressure.",
+                         "components", "chamber", "pressure")
+
+    alt = config.get("flightConditions", {}).get("altitude_km")
+    if alt is not None and alt < 0:
+        issues.warning(f"Altitude {alt:g} km is negative.", "flightConditions", "altitude_km")
+
+    return issues
+
+
+def exit_shock_pressure(p_e, M_e, g):
+    """pressure behind a normal shock standing at the exit section"""
+    return p_e * (1 + 2 * g / (g + 1) * (M_e ** 2 - 1))
+
+
+def _check_rocket_results(config, results):
+    issues = Issues()
+    nozzle = results["mainNozzle"]
+    perf = results["performance"]
+    p_a = results["ambient_pressure"]
+    p_e, M_e = nozzle["exit_pressure"], nozzle["mach"]
+    N = ("components", "nozzle", "area_ratio")
+    if "burn" in results:
+        return _check_burn(config, results, issues)
+    g = config["hotGasProperties"]["gamma"]
+
+    if p_a > 0 and not nozzle["adapted"]:
+        p_shock = exit_shock_pressure(p_e, M_e, g)
+        if p_shock < p_a:
+            issues.error(f"Strongly over-expanded nozzle: even a normal shock at the exit ({p_shock / 1000:.1f} kPa) does "
+                         f"not reach ambient pressure ({p_a / 1000:.1f} kPa), so the shock moves inside the nozzle and the "
+                         "isentropic model does not apply. Lower the area ratio.", *N)
+            return issues
+        if p_e < 0.4 * p_a:
+            issues.warning(f"Exit pressure {p_e / 1000:.1f} kPa is below 40% of ambient (Summerfield criterion): the jet "
+                           "likely separates from the wall and the computed thrust is not reliable.", *N)
+        elif p_e < 0.99 * p_a:
+            issues.info(f"The nozzle is over-expanded (pe = {p_e / 1000:.1f} kPa < pa): a smaller area ratio would give more thrust.", *N)
+        elif p_e > 1.01 * p_a:
+            issues.info(f"The nozzle is under-expanded (pe = {p_e / 1000:.1f} kPa > pa): a larger area ratio would give more thrust.", *N)
+
+    values = [perf[k] for k in ("thrust", "Isp", "CF", "c_star")]
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+        issues.error("The performance figures are undefined: check the inputs.")
+    elif perf["thrust"] <= 0:
+        issues.warning(f"Thrust is {perf['thrust'] / 1000:.2f} kN (≤ 0): the pressure thrust loss exceeds the jet thrust.", *N)
+
+    return issues
+
+
+def _check_burn(config, results, issues):
+    """checks along the whole burn: the nozzle sees every chamber pressure from ignition to burnout"""
+    burn = results["burn"]
+    h = burn["history"]
+    p_a = results["ambient_pressure"]
+    N = ("components", "nozzle")
+    T = ("components", "nozzle", "throat_diameter")
+
+    values = [burn[k] for k in ("burn_time", "total_impulse", "max_pressure", "Isp")]
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values) or burn["burn_time"] <= 0:
+        issues.error("The burn could not be computed: check the inputs.")
+        return issues
+
+    # each point carries its own γ and exit Mach (the layers of a cigarette grain may differ)
+    if p_a > 0 and min(p * critical_pressure_ratio(g) for p, g in zip(h["pressure"], h["gamma"])) <= p_a:
+        issues.error(f"The chamber pressure drops to {burn['min_pressure'] / 1e6:.3f} MPa: the throat is no longer choked "
+                     "and the model does not apply. Reduce the throat diameter.", *T)
+        return issues
+
+    p_max, p_min = burn["max_pressure"], burn["min_pressure"]
+    if p_max > 2e7:
+        issues.warning(f"Maximum chamber pressure {p_max / 1e6:.1f} MPa is very high for a solid motor case (≈ 3–15 MPa): "
+                       "enlarge the throat.", *T)
+    if p_min < 1e6:
+        issues.warning(f"The chamber pressure falls to {p_min / 1e6:.2f} MPa: below ≈ 1–2 MPa composite propellants burn "
+                       "irregularly (combustion stability limit).", *T)
+
+    if p_a > 0:
+        times, pressures = h["time"], h["exit_pressure"]
+        points = list(zip(pressures, h["exit_mach"], h["gamma"]))
+        dt = [times[i + 1] - times[i] for i in range(len(times) - 1)]
+        def fraction(cond):
+            return sum(d for d, a, b in zip(dt, points[:-1], points[1:]) if cond(*a) or cond(*b)) / burn["burn_time"]
+        shock = fraction(lambda pe, M, g: exit_shock_pressure(pe, M, g) < p_a)
+        separated = fraction(lambda pe, M, g: pe < 0.4 * p_a)
+        if shock > 0:
+            issues.warning(f"For {shock:.0%} of the burn the nozzle is so over-expanded that a shock stands inside it: "
+                           "the thrust in that part is not reliable. Lower the area ratio.", *N, "area_ratio")
+        elif separated > 0:
+            issues.warning(f"For {separated:.0%} of the burn the exit pressure is below 40% of ambient (Summerfield): "
+                           "the jet likely separates.", *N, "area_ratio")
+        else:
+            p_e_min, p_e_max = min(pressures), max(pressures)
+            if p_e_max < 0.99 * p_a:
+                issues.info(f"The nozzle is over-expanded for the whole burn (pe = {p_e_min / 1000:.1f}–{p_e_max / 1000:.1f} kPa).", *N, "area_ratio")
+            elif p_e_min > 1.01 * p_a:
+                issues.info(f"The nozzle is under-expanded for the whole burn (pe = {p_e_min / 1000:.1f}–{p_e_max / 1000:.1f} kPa).", *N, "area_ratio")
+
+    if config["engineType"] == "endBurner":
+        if min(h["thrust"]) <= 0:
+            issues.warning("The thrust is ≤ 0 during part of the burn: the pressure thrust loss exceeds the jet thrust.", *N, "area_ratio")
+        return issues
+
+    ratio = max(h["burn_area"]) / min(h["burn_area"])
+    shape = "neutral" if ratio < 1.05 else "progressive-regressive" if h["burn_area"][0] < max(h["burn_area"]) > h["burn_area"][-1] \
+        else "progressive" if h["burn_area"][-1] > h["burn_area"][0] else "regressive"
+    issues.info(f"Burn area varies by {(ratio - 1):.0%} (max/min) during the burn: {shape} grain.", "components", "grain")
+
+    if min(h["thrust"]) <= 0:
+        issues.warning("The thrust is ≤ 0 during part of the burn: the pressure thrust loss exceeds the jet thrust.", *N, "area_ratio")
     return issues

@@ -18,6 +18,7 @@
       </div>
     </div>
 
+    <nav class="family-switch" id="familySwitch" aria-label="Engine family"></nav>
     <nav class="engine-switch" id="engineSwitch" aria-label="Engine type"></nav>
 
     <div class="actions">
@@ -51,7 +52,7 @@
 
       <section class="card">
         <div class="card-head">
-          <h3>Engine schematic</h3>
+          <h3 id="schematicTitle">Engine schematic</h3>
           <div class="legend sol">
             <span id="tmin">–</span>
             <span class="heatbar"></span>
@@ -67,7 +68,7 @@
         <div class="card">
           <div class="card-head">
             <h3>T–s diagram</h3>
-            <span class="muted small">s referred to ambient static conditions</span>
+            <span class="muted small" id="tsNote">s referred to ambient static conditions</span>
           </div>
           <div id="tsPlot" class="plot sol"></div>
         </div>
@@ -83,7 +84,8 @@
       <section class="card">
         <div class="tabs" id="tabs">
           <button data-tab="profiles" class="active">p &amp; T along the engine</button>
-          <button data-tab="energy">Energy balance</button>
+          <button data-tab="burn" data-show="solidRocket endBurner">Burn history</button>
+          <button data-tab="energy" data-show="air">Energy balance</button>
           <button data-tab="sweep">Parametric sweep</button>
           <button data-tab="exam">Exam text</button>
           <button data-tab="console">Console</button>
@@ -91,6 +93,16 @@
 
         <div class="tab-panel active" data-panel="profiles">
           <div id="profilePlot" class="plot sol"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="burn">
+          <div class="grid-2 tight sol">
+            <div id="burnPlot1" class="plot"></div>
+            <div id="burnPlot2" class="plot"></div>
+          </div>
+          <div class="table-wrap sol" id="phaseTable" data-show="endBurner"></div>
+          <p class="hint">Quasi-steady ballistics: no ignition transient and no tail-off. The burn ends when the web is consumed;
+            the layers of a cigarette grain follow each other with an instantaneous change of pressure.</p>
         </div>
 
         <div class="tab-panel" data-panel="energy">

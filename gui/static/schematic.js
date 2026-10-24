@@ -22,6 +22,37 @@ function textOn(rgb) {
   return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? '#0f172a' : '#ffffff';
 }
 
+/* Thrust-chamber contour in throat radii: cylindrical chamber (contraction ratio 3),
+ * 30° convergent cone, bell divergent (80% of a 15° cone, 30° at the throat, 10° at the exit).
+ * Only the exit radius √ε comes from the solver: the rest is a representative shape. */
+function rocketContour(eps) {
+  const rad = Math.PI / 180;
+  const Rc = Math.sqrt(3), Lc = 3, Lconv = (Rc - 1) / Math.tan(30 * rad);
+  const Re = Math.sqrt(eps), Ln = 0.8 * (Re - 1) / Math.tan(15 * rad);
+  const tn = Math.tan(30 * rad), te = Math.tan(10 * rad);
+  const xq = (Re - 1 - te * Ln) / (tn - te);       // control point: tangents at throat and exit
+  const pts = [{ x: -Lc - Lconv, r: Rc, part: 'chamber' }, { x: -Lconv, r: Rc, part: 'chamber' }];
+  for (let i = 1; i <= 12; i++) pts.push({ x: -Lconv + Lconv * i / 12, r: Rc - (Rc - 1) * i / 12, part: 'convergent' });
+  for (let i = 1; i <= 40; i++) {
+    const t = i / 40;
+    pts.push({ x: 2 * (1 - t) * t * xq + t * t * Ln, r: (1 - t) ** 2 + 2 * (1 - t) * t * (1 + tn * xq) + t * t * Re, part: 'divergent' });
+  }
+  return { pts, Rc, Re, Lc, Lconv, Ln };
+}
+
+/* Mach number from A/A* on the subsonic or supersonic branch (bisection) */
+function machFromArea(ratio, g, supersonic) {
+  const f = M => 1 / M * Math.pow(2 / (g + 1) * (1 + (g - 1) / 2 * M * M), (g + 1) / (2 * (g - 1)));
+  if (ratio <= 1) return 1;
+  let lo = supersonic ? 1 : 1e-6, hi = supersonic ? 2 : 1;
+  if (supersonic) while (f(hi) < ratio) hi *= 2;
+  for (let i = 0; i < 100; i++) {
+    const m = (lo + hi) / 2;
+    if ((f(m) < ratio) === supersonic) lo = m; else hi = m;
+  }
+  return (lo + hi) / 2;
+}
+
 /* Layout of the engine: blocks (symmetric about the axis), bypass bands and station markers. */
 function engineLayout(engine, cfg, res) {
   const st = Object.fromEntries(res.stations.map(s => [s.name, s]));
@@ -113,7 +144,257 @@ function bladeLines(x0, x1, hIn, hOut, A, spacing) {
   return d;
 }
 
+/* hover and click behaviour shared by the schematics */
+function bindSchematic(container, stations, handlers) {
+  container.querySelectorAll('.block').forEach(el => {
+    el.addEventListener('click', () => el.dataset.group && handlers.onComponent(el.dataset.group));
+    el.addEventListener('mousemove', ev => handlers.onHover(ev, `<b>${el.dataset.label}</b>${el.dataset.group ? 'click to edit inputs' : 'no inputs'}`));
+    el.addEventListener('mouseleave', () => handlers.onHover(null));
+  });
+  container.querySelectorAll('.station').forEach(el => {
+    const s = stations[el.dataset.name];
+    el.addEventListener('mousemove', ev => handlers.onHover(ev, handlers.stationTip(s)));
+    el.addEventListener('mouseleave', () => handlers.onHover(null));
+  });
+}
+
+function stationMarker(s, x, y, color, scale = 1) {
+  return `<g class="station" data-name="${s.name}" transform="translate(${x} ${y}) scale(${scale})">
+      <circle r="11" fill="${color}" stroke="var(--panel)" stroke-width="2.5"/>
+      <text text-anchor="middle" dy="4" font-size="11" font-weight="700" fill="${textOn(color)}">${s.number}</text>
+    </g>`;
+}
+
+/* Thrust chamber drawn to scale from the area ratio, coloured by the isentropic temperature. */
+function renderRocketSchematic(container, res, handlers) {
+  const st = Object.fromEntries(res.stations.map(s => [s.name, s]));
+  const temps = res.stations.map(s => s.temperature).filter(isFinite);
+  const Tmin = Math.min(...temps), Tmax = Math.max(...temps);
+  const col = T => heatColor((T - Tmin) / Math.max(1, Tmax - Tmin));
+  const noz = res.mainNozzle, g = res.gases.hot.gamma, Tc = st['Chamber'].temperature;
+
+  const C = rocketContour(noz.area_ratio);
+  const k = 90 / Math.max(C.Rc, C.Re);                  // px per throat radius
+  const x0 = 70 - C.pts[0].x * k, A = 90 + 40;          // throat at x0, axis at A
+  const X = x => x0 + x * k;
+  const xEnd = X(C.Ln), plumeLen = 140;
+  const W = xEnd + plumeLen + 150, H = 2 * 90 + 100;
+
+  // temperature along the wall (isentropic), as gradient stops over the whole length
+  const xFirst = C.pts[0].x, xLast = C.Ln;
+  const stops = C.pts.filter((q, i) => i % 3 === 0 || i === C.pts.length - 1).map(q => {
+    const m = machFromArea(q.r * q.r, g, q.part === 'divergent');
+    const T = Tc / (1 + (g - 1) / 2 * m * m);
+    return `<stop offset="${((q.x - xFirst) / (xLast - xFirst)).toFixed(4)}" stop-color="${col(T)}"/>`;
+  }).join('');
+  let defs = `<linearGradient id="rk-flow" gradientUnits="userSpaceOnUse" x1="${X(xFirst)}" x2="${X(xLast)}" y1="0" y2="0">${stops}</linearGradient>`;
+
+  const half = (pts, sgn) => pts.map(q => `${X(q.x).toFixed(1)} ${(A - sgn * q.r * k).toFixed(1)}`);
+  const region = pts => `M${half(pts, 1).join('L')}L${half(pts.slice().reverse(), -1).join('L')}Z`;
+  const chamberPts = C.pts.filter(q => q.part === 'chamber');
+  const nozzlePts = [chamberPts[chamberPts.length - 1], ...C.pts.filter(q => q.part !== 'chamber')];
+
+  // plume: contracts when over-expanded, widens when under-expanded
+  const pe = noz.exit_pressure, pa = res.ambient_pressure;
+  const re = C.Re * k;
+  const spread = Math.min(pa > 0 ? Math.max(0.55, Math.pow(pe / pa, 0.25)) : 1.6, 1.6, 110 / re);
+  defs += `<linearGradient id="rk-plume" x1="0" x2="1"><stop offset="0" stop-color="${col(st['Nozzle exit'].temperature)}" stop-opacity=".6"/>
+    <stop offset="1" stop-color="${col(st['Nozzle exit'].temperature)}" stop-opacity="0"/></linearGradient>`;
+  let body = `<path d="M${xEnd} ${A - re}Q${xEnd + plumeLen * 0.5} ${A - re * (1 + spread) / 2} ${xEnd + plumeLen} ${A - re * spread}
+    L${xEnd + plumeLen} ${A + re * spread}Q${xEnd + plumeLen * 0.5} ${A + re * (1 + spread) / 2} ${xEnd} ${A + re}Z" fill="url(#rk-plume)"/>`;
+
+  const injX = X(chamberPts[0].x);
+  body += `<g class="block" data-group="rocketChamber" data-label="Combustion chamber">
+      <path d="${region(chamberPts)}" fill="url(#rk-flow)"/>
+      <rect x="${injX - 12}" y="${A - C.Rc * k - 4}" width="12" height="${2 * C.Rc * k + 8}" rx="3" fill="var(--shaft)"/>
+    </g>
+    <g class="block" data-group="rocketNozzle" data-label="Nozzle"><path d="${region(nozzlePts)}" fill="url(#rk-flow)"/></g>
+    <path d="M${half(C.pts, 1).join('L')}" fill="none" stroke="var(--text)" stroke-opacity=".7" stroke-width="3"/>
+    <path d="M${half(C.pts, -1).join('L')}" fill="none" stroke="var(--text)" stroke-opacity=".7" stroke-width="3"/>`;
+
+  // dimensions and exit annotation
+  // dimension labels on a common baseline below the chamber
+  const tx = X(0), yDim = A + Math.max(C.Rc, C.Re) * k + 18;
+  const dim = (x, r, label) => `<line x1="${x}" x2="${x}" y1="${A - r}" y2="${yDim - 12}" stroke="var(--muted)" stroke-dasharray="3 3"/>
+    <text x="${x}" y="${yDim}" text-anchor="middle" font-size="11" fill="var(--muted)">${label}</text>`;
+  let marks = dim(tx, k, `D<tspan baseline-shift="sub" font-size="8">t</tspan> = ${res.geometry.throat_diameter.toFixed(3)} m`)
+    + dim(xEnd, re, `D<tspan baseline-shift="sub" font-size="8">e</tspan> = ${res.geometry.exit_diameter.toFixed(3)} m`);
+  const expansion = pa === 0 ? 'vacuum' : Math.abs(pe - pa) / pa < 0.01 ? 'adapted' : pe < pa ? 'over-expanded' : 'under-expanded';
+  marks += `<text x="${xEnd + 10}" y="${A - re - 22}" font-size="12" fill="var(--text)" font-weight="650">M = ${noz.mach.toFixed(2)} · ε = ${(+noz.area_ratio).toFixed(2)}</text>
+    <text x="${xEnd + 10}" y="${A - re - 7}" font-size="11" fill="var(--muted)">${expansion}, pₑ = ${(pe / 1000).toFixed(1)} kPa${pa > 0 ? ` vs pₐ = ${(pa / 1000).toFixed(1)} kPa` : ''}</text>`;
+
+  marks += stationMarker(st['Chamber'], X((chamberPts[0].x + chamberPts[1].x) / 2), A, col(st['Chamber'].temperature));
+  marks += stationMarker(st['Throat'], tx, A, col(st['Throat'].temperature));
+  marks += stationMarker(st['Nozzle exit'], xEnd, A, col(st['Nozzle exit'].temperature));
+
+  const labels = `<text x="${X((chamberPts[0].x + chamberPts[1].x) / 2)}" y="${H - 8}" text-anchor="middle" font-size="12" fill="var(--muted)">Chamber</text>
+    <text x="${(tx + xEnd) / 2}" y="${H - 8}" text-anchor="middle" font-size="12" fill="var(--muted)">Nozzle</text>`;
+
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Thrust chamber schematic">
+    <defs>${defs}</defs>
+    <line x1="10" x2="${W - 10}" y1="${A}" y2="${A}" stroke="var(--muted)" stroke-opacity=".35" stroke-dasharray="6 6"/>
+    ${body}${marks}${labels}
+  </svg>`;
+  bindSchematic(container, st, handlers);
+  return { Tmin, Tmax };
+}
+
+/* Solid motor to scale: case, grain (drawn by o.grain), nozzle and plume at the maximum-pressure state.
+ * o: D (case inner diameter), grainLength [m], aftGap [m] free length before the nozzle,
+ *    foreGap [m] free length at the head end (default 0.04 D),
+ *    grain(k, A, x0, f) -> { body, marks }, chamberX(xGrain, xAft) for station 1, grainLabel, dimLabel. */
+function drawSolidMotor(container, res, handlers, o) {
+  const st = Object.fromEntries(res.stations.map(s => [s.name, s]));
+  const temps = res.stations.map(s => s.temperature).filter(isFinite);
+  const Tmin = Math.min(...temps), Tmax = Math.max(...temps);
+  const col = T => heatColor((T - Tmin) / Math.max(1, Tmax - Tmin));
+  const noz = res.mainNozzle, g = res.gases.hot.gamma, D = o.D;
+  const rt = res.geometry.throat_diameter / 2;
+
+  const k = 70 / (D / 2);                                 // px per metre
+  const A = 70 + 50, wall = 5;
+  const xCase = 40, xGrain = xCase + (o.foreGap ?? 0.04 * D) * k;
+  const xAft = xGrain + (o.grainLength + o.aftGap) * k;   // aft end of the case
+  // nozzle: 45° convergent from the case to the throat, then the bell of rocketContour
+  const C = rocketContour(noz.area_ratio);
+  const conv = (D / 2 / rt - 1) * rt * k;
+  const xT = xAft + conv;
+  const div = C.pts.filter(q => q.part === 'divergent');
+  const xEnd = xT + C.Ln * rt * k, re = C.Re * rt * k;
+  const W = xEnd + 260, H = 2 * 70 + 140;
+  const f = Math.max(1, W / 1000);                      // long motors: keep the text readable once scaled down
+
+  let defs = '', body = '', marks = '', labels = '';
+  // hot gas in the chamber and in the nozzle (temperature along the nozzle)
+  const stops = [{ x: 0, T: st['Chamber'].temperature }, ...div.filter((q, i) => i % 4 === 0 || i === div.length - 1).map(q => {
+    const m = machFromArea(q.r * q.r, g, true);
+    return { x: q.x, T: st['Chamber'].temperature / (1 + (g - 1) / 2 * m * m) };
+  })];
+  defs += `<linearGradient id="srm-noz" gradientUnits="userSpaceOnUse" x1="${xT}" x2="${xEnd}" y1="0" y2="0">${
+    stops.map(s => `<stop offset="${(s.x / C.Ln).toFixed(4)}" stop-color="${col(s.T)}"/>`).join('')}</linearGradient>`;
+  body += `<rect x="${xCase}" y="${A - D / 2 * k}" width="${xAft - xCase}" height="${D * k}" fill="${col(st['Chamber'].temperature)}" opacity=".9"/>`;
+
+  const grain = o.grain(k, A, xGrain, f);
+  body += grain.body;
+  marks += grain.marks;
+
+  // nozzle gas and walls
+  const wallPts = sgn => [`${xAft} ${A - sgn * D / 2 * k}`, `${xT} ${A - sgn * rt * k}`,
+    ...div.map(q => `${(xT + q.x * rt * k).toFixed(1)} ${(A - sgn * q.r * rt * k).toFixed(1)}`)];
+  const top = wallPts(1), bottom = wallPts(-1);
+  body += `<g class="block" data-group="srmNozzle" data-label="Nozzle">
+    <path d="M${top.join('L')}L${bottom.slice().reverse().join('L')}Z" fill="url(#srm-noz)"/></g>`;
+  body += `<path d="M${top.join('L')}" fill="none" stroke="var(--text)" stroke-opacity=".7" stroke-width="3"/>
+    <path d="M${bottom.join('L')}" fill="none" stroke="var(--text)" stroke-opacity=".7" stroke-width="3"/>`;
+  // case and forward closure
+  body += `<path d="M${xAft} ${A - D / 2 * k - wall}L${xCase - wall} ${A - D / 2 * k - wall}L${xCase - wall} ${A + D / 2 * k + wall}L${xAft} ${A + D / 2 * k + wall}"
+    fill="none" stroke="var(--shaft)" stroke-width="${2 * wall}"/>`;
+
+  // plume, contracted or widened by the expansion at the maximum pressure
+  const pe = noz.exit_pressure, pa = res.ambient_pressure;
+  const spread = Math.min(pa > 0 ? Math.max(0.55, Math.pow(pe / pa, 0.25)) : 1.6, 1.6, 100 / re);
+  defs += `<linearGradient id="srm-plume" x1="0" x2="1"><stop offset="0" stop-color="${col(st['Nozzle exit'].temperature)}" stop-opacity=".6"/>
+    <stop offset="1" stop-color="${col(st['Nozzle exit'].temperature)}" stop-opacity="0"/></linearGradient>`;
+  body += `<path d="M${xEnd} ${A - re}Q${xEnd + 60} ${A - re * (1 + spread) / 2} ${xEnd + 120} ${A - re * spread}
+    L${xEnd + 120} ${A + re * spread}Q${xEnd + 60} ${A + re * (1 + spread) / 2} ${xEnd} ${A + re}Z" fill="url(#srm-plume)"/>`;
+
+  // dimensions
+  const yDim = A + D / 2 * k + 14 + 12 * f;
+  const dim = (x, label) => `<text x="${x}" y="${yDim}" text-anchor="middle" font-size="${11 * f}" fill="var(--muted)">${label}</text>`;
+  // a short nozzle: exit diameter on a second line
+  const dimE = (xEnd + 30 - xT < 130 * f) ? (x, label) => dim(x, label).replace(`y="${yDim}"`, `y="${yDim + 15 * f}"`) : dim;
+  marks += dim(xT, `D<tspan baseline-shift="sub" font-size="${8 * f}">t</tspan> = ${(2 * rt).toFixed(3)} m`)
+    + dimE(xEnd + 30, `D<tspan baseline-shift="sub" font-size="${8 * f}">e</tspan> = ${res.geometry.exit_diameter.toFixed(3)} m`)
+    + dim(xGrain + Math.min(o.grainLength * k, 300) / 2, o.dimLabel);
+  marks += `<text x="${xEnd + 10}" y="${A - re - 12 - 14 * f}" font-size="${12 * f}" fill="var(--text)" font-weight="650">M = ${noz.mach.toFixed(2)} · ε = ${(+noz.area_ratio).toFixed(2)}</text>
+    <text x="${xEnd + 10}" y="${A - re - 10}" font-size="${11 * f}" fill="var(--muted)">at max pressure ${(st['Chamber'].pressure / 1e6).toFixed(2)} MPa</text>`;
+
+  marks += stationMarker(st['Chamber'], o.chamberX(xGrain, xAft), A, col(st['Chamber'].temperature), f);
+  marks += stationMarker(st['Throat'], xT, A, col(st['Throat'].temperature), f);
+  marks += stationMarker(st['Nozzle exit'], xEnd, A, col(st['Nozzle exit'].temperature), f);
+
+  labels = `<text x="${(xGrain + xAft) / 2}" y="${H - 8}" text-anchor="middle" font-size="${12 * f}" fill="var(--muted)">${o.grainLabel}</text>
+    <text x="${(xT + xEnd) / 2}" y="${H - 8}" text-anchor="middle" font-size="${12 * f}" fill="var(--muted)">Nozzle</text>`;
+
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Solid motor schematic">
+    <defs>${defs}</defs>
+    <line x1="10" x2="${W - 10}" y1="${A}" y2="${A}" stroke="var(--muted)" stroke-opacity=".35" stroke-dasharray="6 6"/>
+    ${body}${marks}${labels}
+  </svg>`;
+  bindSchematic(container, st, handlers);
+  return { Tmin, Tmax };
+}
+
+/* BATES: segments in section with burn-back contours at 1/3 and 2/3 of the web */
+function renderSolidSchematic(container, cfg, res, handlers) {
+  const G = cfg.components.grain;
+  const N = G.segments, D = G.outer_diameter, d0 = G.core_diameter, L0 = G.segment_length;
+  const ends = !G.inhibited_ends, web = res.grain.web, gap = 0.04 * D;
+  const prop = '#c8a165';
+  return drawSolidMotor(container, res, handlers, {
+    D, grainLength: N * L0 + (N - 1) * gap, aftGap: 0.06 * D,
+    grainLabel: `Grain · ${N} BATES segment${N > 1 ? 's' : ''}`, dimLabel: `D = ${D} m · d₀ = ${d0} m`,
+    chamberX: (xGrain, xAft) => (xGrain + xAft) / 2,
+    grain: (k, A, xGrain, f) => {
+      let body = '';
+      for (let i = 0; i < N; i++) {
+        const x0 = xGrain + i * (L0 + gap) * k, x1 = x0 + L0 * k;
+        for (const sgn of [-1, 1]) {
+          const yIn = A + sgn * d0 / 2 * k, yOut = A + sgn * D / 2 * k;
+          body += `<rect class="block" data-group="srmGrain" data-label="Grain segment ${i + 1}" x="${x0}" y="${Math.min(yIn, yOut)}" width="${x1 - x0}"
+            height="${Math.abs(yOut - yIn)}" fill="${prop}" stroke="var(--panel)" stroke-width="1"/>`;
+          for (const fr of [1 / 3, 2 / 3]) {
+            const w = fr * web, xa = x0 + (ends ? w : 0) * k, xb = x1 - (ends ? w : 0) * k, yr = A + sgn * (d0 / 2 + w) * k;
+            if (xb <= xa || d0 / 2 + w >= D / 2) continue;
+            body += `<path d="M${xa} ${yOut}L${xa} ${yr}L${xb} ${yr}L${xb} ${yOut}" fill="none" stroke="#7c2d12" stroke-opacity=".55" stroke-width="1.2" stroke-dasharray="4 3"/>`;
+          }
+        }
+      }
+      const marks = `<text x="${xGrain}" y="${A - D / 2 * k - 12}" font-size="${11 * f}" fill="var(--muted)">dashed: burning surface at 1/3 and 2/3 of the web (${(web * 1000).toFixed(1)} mm)</text>`;
+      return { body, marks };
+    },
+  });
+}
+
+/* propellant colours of the layers of a cigarette grain */
+const LAYER_COLORS = ['#c8a165', '#9fb38a', '#b39ac4', '#d4a59a', '#8fb3c9', '#cbb85f'];
+
+/* Cigarette grain: layers stacked from the head end (left) to the nozzle side; layer 1 burns first */
+function renderEndBurnerSchematic(container, cfg, res, handlers) {
+  const D = cfg.components.grain.diameter;
+  const phases = res.phases;
+  const total = phases.reduce((a, p) => a + p.length, 0);
+  return drawSolidMotor(container, res, handlers, {
+    D, grainLength: total, aftGap: 0.3 * D, foreGap: 0,
+    grainLabel: `Cigarette grain · ${phases.length} layer${phases.length > 1 ? 's' : ''} (layer 1 burns first)`,
+    dimLabel: `D = ${D} m · A<tspan baseline-shift="sub" font-size="8">b</tspan> = πD²/4`,
+    chamberX: (xGrain, xAft) => xAft - 0.15 * D * (70 / (D / 2)),
+    grain: (k, A, xGrain, f) => {
+      let body = '', marks = '';
+      let x1 = xGrain + total * k;                      // aft face of layer 1
+      phases.forEach((p, i) => {
+        const x0 = x1 - p.length * k;
+        body += `<rect class="block" data-group="ebLayers.layer${p.layer}" data-label="Layer ${p.layer}" x="${x0}" y="${A - D / 2 * k}"
+          width="${x1 - x0}" height="${D * k}" fill="${LAYER_COLORS[i % LAYER_COLORS.length]}" stroke="var(--panel)" stroke-width="1.5"/>`;
+        if (x1 - x0 > 40 * f) {
+          marks += `<text x="${(x0 + x1) / 2}" y="${A - 8}" text-anchor="middle" font-size="${12 * f}" font-weight="650" fill="#1f2937">${p.layer}</text>
+            <text x="${(x0 + x1) / 2}" y="${A + 10 * f}" text-anchor="middle" font-size="${10 * f}" fill="#1f2937">${(p.pressure / 1e6).toFixed(2)} MPa</text>`;
+        }
+        x1 = x0;
+      });
+      // burning face: the aft face of layer 1, facing the nozzle
+      const xb = xGrain + total * k;
+      body += `<line x1="${xb}" x2="${xb}" y1="${A - D / 2 * k}" y2="${A + D / 2 * k}" stroke="#f97316" stroke-width="4"/>`;
+      marks += `<text x="${xb}" y="${A - D / 2 * k - 12}" text-anchor="middle" font-size="${11 * f}" fill="var(--muted)">burning face →</text>`;
+      return { body, marks };
+    },
+  });
+}
+
 function renderSchematic(container, engine, cfg, res, handlers) {
+  if (engine === 'solidRocket') return renderSolidSchematic(container, cfg, res, handlers);
+  if (engine === 'endBurner') return renderEndBurnerSchematic(container, cfg, res, handlers);
+  if (ENGINES[engine].family === 'rocket') return renderRocketSchematic(container, res, handlers);
   const L = engineLayout(engine, cfg, res);
   const temps = res.stations.map(s => s.temperature).filter(isFinite);
   const Tmin = Math.min(...temps), Tmax = Math.max(...temps);
@@ -203,32 +484,14 @@ function renderSchematic(container, engine, cfg, res, handlers) {
   }
 
   // station markers
-  for (const m of L.markers) {
-    const c = col(m.s.temperature);
-    const label = m.s.number;
-    marks += `<g class="station" data-name="${m.s.name}" transform="translate(${m.x} ${A + m.y})">
-      <circle r="11" fill="${c}" stroke="var(--panel)" stroke-width="2.5"/>
-      <text text-anchor="middle" dy="4" font-size="11" font-weight="700" fill="${textOn(c)}">${label}</text>
-    </g>`;
-  }
+  for (const m of L.markers) marks += stationMarker(m.s, m.x, A + m.y, col(m.s.temperature));
 
   container.innerHTML = `<svg viewBox="0 0 ${L.width} ${H}" role="img" aria-label="Engine schematic">
     <defs>${defs}</defs>
     <line x1="10" x2="${L.width - 10}" y1="${A}" y2="${A}" stroke="var(--muted)" stroke-opacity=".35" stroke-dasharray="6 6"/>
     ${body}${marks}${labels}
   </svg>`;
-
-  // interactions
-  container.querySelectorAll('.block').forEach(el => {
-    el.addEventListener('click', () => el.dataset.group && handlers.onComponent(el.dataset.group));
-    el.addEventListener('mousemove', ev => handlers.onHover(ev, `<b>${el.dataset.label}</b>${el.dataset.group ? 'click to edit inputs' : 'no inputs'}`));
-    el.addEventListener('mouseleave', () => handlers.onHover(null));
-  });
-  container.querySelectorAll('.station').forEach(el => {
-    const s = L.st[el.dataset.name];
-    el.addEventListener('mousemove', ev => handlers.onHover(ev, handlers.stationTip(s)));
-    el.addEventListener('mouseleave', () => handlers.onHover(null));
-  });
+  bindSchematic(container, L.st, handlers);
 
   return { Tmin, Tmax };
 }

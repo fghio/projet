@@ -28,9 +28,14 @@ function delPath(o, p) {
 }
 const hasPath = (o, p) => getPath(o, p) !== undefined;
 const cfg = () => state.configs[state.engine];
+const familyOf = engine => ENGINES[engine].family;
+// solid motors: the result is a burn history
+const BURN_ENGINES = ['solidRocket', 'endBurner'];
+const isRocket = (engine = state.engine) => familyOf(engine) === 'rocket';
 
 function fmt(v, d = 2) {
   if (v == null || !isFinite(v)) return '–';
+  if (Math.abs(v) < 0.5 * 10 ** -d) v = 0;      // no "-0.00" from round-off
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -58,18 +63,47 @@ function download(name, text, type = 'text/plain') {
 
 /* ---------------- engine switch ---------------- */
 function renderEngineSwitch() {
-  $('#engineSwitch').innerHTML = Object.entries(ENGINES).map(([k, e]) =>
+  const family = familyOf(state.engine);
+  $('#familySwitch').innerHTML = Object.entries(FAMILIES).map(([k, f]) =>
+    `<button data-family="${k}" class="${k === family ? 'active' : ''}">${f.label}</button>`).join('');
+  $$('#familySwitch button').forEach(b => b.addEventListener('click', () => setFamily(b.dataset.family)));
+
+  $('#engineSwitch').innerHTML = Object.entries(ENGINES).filter(([, e]) => e.family === family).map(([k, e]) =>
     `<button data-engine="${k}" class="${k === state.engine ? 'active' : ''}" title="${e.label}">${ENGINE_ICONS[k]}<span>${e.label}</span></button>`
   ).join('');
   $$('#engineSwitch button').forEach(b => b.addEventListener('click', () => setEngine(b.dataset.engine)));
 }
 
+/* go back to the engine last used in that family */
+function setFamily(family) {
+  if (family === familyOf(state.engine)) return;
+  const last = storage(`projet.engine.${family}`);
+  const first = Object.keys(ENGINES).find(k => ENGINES[k].family === family && state.configs[k]);
+  setEngine(last && ENGINES[last] && familyOf(last) === family && state.configs[last] ? last : first);
+}
+
 function setEngine(engine) {
+  const previous = state.engine;
   state.engine = engine;
   storage('projet.engine', engine);
+  storage(`projet.engine.${familyOf(engine)}`, engine);
   renderEngineSwitch();
+  renderFamilyViews();
+  // the burn history is what a solid motor is about: show it when arriving there
+  if (BURN_ENGINES.includes(engine) && !BURN_ENGINES.includes(previous)) $('#tabs button[data-tab="burn"]').click();
   renderForm();
   runNow();
+}
+
+/* views that only make sense for one family (data-show="air") or one engine (data-show="solidRocket") */
+function renderFamilyViews() {
+  const rocket = isRocket();
+  $$('[data-show]').forEach(el => (el.hidden = !el.dataset.show.split(' ').some(k => k === familyOf(state.engine) || k === state.engine)));
+  $('#tabs button[data-tab="profiles"]').innerHTML = rocket ? 'p, T &amp; M along the nozzle' : 'p &amp; T along the engine';
+  const active = $('#tabs button.active');
+  if (active && active.hidden) $('#tabs button[data-tab="profiles"]').click();
+  $('#schematicTitle').textContent = BURN_ENGINES.includes(state.engine) ? 'Solid motor · nozzle state at maximum pressure' : rocket ? 'Thrust chamber' : 'Engine schematic';
+  $('#tsNote').textContent = rocket ? 's referred to the chamber state' : 's referred to ambient static conditions';
 }
 
 /* ---------------- form ---------------- */
@@ -82,6 +116,12 @@ function activeMode(g) {
   return opts.find(o => hasPath(cfg(), o.field.path)) || opts[0];
 }
 
+/* computed value shown in place of an optional input that is switched off */
+function optionalResult(f) {
+  if (!f.optional || !f.optional.fromResult || !state.resp || state.resp.engine !== state.engine) return undefined;
+  try { return f.optional.fromResult(state.resp.results); } catch (e) { return undefined; }
+}
+
 function fieldHTML(f, disabled = false) {
   if (f.subhead) return `<div class="subhead">${f.subhead}</div>`;
   if (f.check) {
@@ -92,10 +132,8 @@ function fieldHTML(f, disabled = false) {
   const scale = f.scale || 1;
   const val = raw === undefined ? '' : +(raw / scale).toPrecision(10);
   const optional = f.optional ? (raw === undefined) : false;
-  let placeholder = f.def !== undefined ? +(f.def / scale).toPrecision(6) : '';
-  if (f.optional && optional && state.resp && state.resp.results.propeller) {
-    placeholder = fmt(state.resp.results.propeller.alpha_power, 4);
-  }
+  let placeholder = f.placeholder ?? (f.def !== undefined ? +(f.def / scale).toPrecision(6) : '');
+  if (optional && optionalResult(f) !== undefined) placeholder = +(optionalResult(f) / scale).toPrecision(6);
   const step = f.step === 'any' ? 'any' : f.step;
   const isDisabled = disabled || optional;
   return `
@@ -106,19 +144,54 @@ function fieldHTML(f, disabled = false) {
         <span class="unit">${f.unit}</span>
       </div>
     </div>
-    ${f.isa ? `<div class="row" style="justify-content:flex-end"><button class="btn small" data-isa>Fill T, p, ρ from ISA</button></div>` : ''}
+    ${f.isa === true ? `<div class="row" style="justify-content:flex-end"><button class="btn small" data-isa>Fill T, p, ρ from ISA</button></div>` : ''}
+    ${f.isa === 'rocket' ? `<div class="row" style="justify-content:flex-end"><button class="btn small" data-vacuum>Vacuum</button><button class="btn small" data-isa>Fill pₐ from ISA</button></div>` : ''}
     ${f.optional ? `<label class="check"><input type="checkbox" data-optional="${f.path.join('.')}" ${optional ? 'checked' : ''}> ${f.optional.label}</label>` : ''}`;
 }
 
-const allFields = () => {
+/* fields of each engine by config path (the same path may differ between families) */
+const FIELD_INDEX = Object.fromEntries(Object.entries(ENGINES).map(([k, e]) => {
   const out = {};
-  for (const g of Object.values(GROUPS)) {
+  for (const g of e.groups.map(id => GROUPS[id])) {
     (g.fields || []).forEach(f => f.path && (out[f.path.join('.')] = f));
     if (g.modes) g.modes.options.forEach(o => (out[o.field.path.join('.')] = o.field));
   }
-  return out;
-};
-const FIELD_INDEX = allFields();
+  return [k, out];
+}));
+const fieldAt = key => FIELD_INDEX[state.engine][key] || FIELD_INDEX[state.engine][key.replace(/\.layer\d+\./, '.layer#.')];
+
+/* layer blocks (layer1, layer2, ...) of a group with layers, in burning order */
+function layerKeys(g) {
+  const block = getPath(cfg(), g.layers.path) || {};
+  return Object.keys(block).filter(k => new RegExp(`^${g.layers.prefix}\\d+$`).test(k) && typeof block[k] === 'object')
+    .sort((a, b) => +a.slice(g.layers.prefix.length) - +b.slice(g.layers.prefix.length));
+}
+const layerField = (f, key) => (f.path ? { ...f, path: f.path.map(p => (p === 'layer#' ? key : p)) } : f);
+
+function layersHTML(id, g, openState) {
+  const keys = layerKeys(g);
+  const groups = keys.map((key, i) => {
+    const gid = `${id}.${key}`;
+    const where = i === 0 ? ' · nozzle side, burns first' : i === keys.length - 1 ? ' · head end' : '';
+    const remove = keys.length > 1 ? `<div class="row" style="justify-content:flex-end"><button class="btn small ghost" data-remove-layer="${id}:${key}">Remove layer</button></div>` : '';
+    const open = openState[gid] !== undefined ? openState[gid] : true;
+    return `<details class="group" data-group="${gid}" ${open ? 'open' : ''}>
+      <summary><span class="dot" style="background:${LAYER_COLORS[i % LAYER_COLORS.length]}"></span>${g.title} ${i + 1}<span class="muted small">${where}</span></summary>
+      <div class="group-body">${g.fields.map(f => fieldHTML(layerField(f, key))).join('')}${remove}</div>
+    </details>`;
+  });
+  groups.push(`<div class="row" style="justify-content:flex-end;margin:-4px 0 10px"><button class="btn small" data-add-layer="${id}">+ Add layer (head end)</button></div>`);
+  return groups.join('');
+}
+
+/* rename the layers 1..N after a removal, keeping their order */
+function renumberLayers(g) {
+  const block = getPath(cfg(), g.layers.path);
+  const keys = layerKeys(g);
+  const values = keys.map(k => block[k]);
+  keys.forEach(k => delete block[k]);
+  values.forEach((v, i) => (block[`${g.layers.prefix}${i + 1}`] = v));
+}
 
 function renderForm() {
   const openState = {};
@@ -126,6 +199,7 @@ function renderForm() {
 
   const html = ENGINES[state.engine].groups.map(id => {
     const g = GROUPS[id];
+    if (g.layers) return layersHTML(id, g, openState);
     const active = groupActive(g);
     let body = '';
     if (g.toggle) {
@@ -156,10 +230,10 @@ function bindForm() {
   $$('#form input[data-path]').forEach(inp => {
     inp.addEventListener('input', () => {
       const path = inp.dataset.path.split('.');
-      const f = FIELD_INDEX[inp.dataset.path];
+      const f = fieldAt(inp.dataset.path);
       const box = inp.parentElement;
       if (inp.value.trim() === '') {
-        if (f.def === undefined && !f.optional) { box.classList.add('invalid'); return; }
+        if (f.def === undefined && !f.optional && !f.blank) { box.classList.add('invalid'); return; }
         delPath(cfg(), path);
         box.classList.remove('invalid');
       } else {
@@ -181,14 +255,13 @@ function bindForm() {
 
   $$('#form input[data-optional]').forEach(inp => inp.addEventListener('change', () => {
     const path = inp.dataset.optional.split('.');
-    const f = FIELD_INDEX[inp.dataset.optional];
+    const f = fieldAt(inp.dataset.optional);
     if (inp.checked) {
       state.stash[inp.dataset.optional] = getPath(cfg(), path);
       delPath(cfg(), path);
     } else {
       const prev = state.stash[inp.dataset.optional];
-      const fromResult = state.resp && state.resp.results.propeller ? +state.resp.results.propeller.alpha_power.toFixed(4) : undefined;
-      setPath(cfg(), path, prev ?? fromResult ?? f.optional.value);
+      setPath(cfg(), path, prev ?? optionalResult(f) ?? f.optional.value);
     }
     renderForm();
     runNow();
@@ -218,11 +291,8 @@ function bindForm() {
     delPath(cfg(), current.field.path);
     // start the new mode from the value the solver just computed, when available
     let v = state.stash[tk];
-    if (v === undefined && state.resp) {
-      const r = state.resp.results;
-      const stName = seg.dataset.modes === 'combustor' ? 'Combustor' : 'PostCombustor';
-      const s = r.stations.find(x => x.name === stName);
-      if (s) v = target.field.path[2] === 'fuel_ratio' ? +s.fuel_ratio.toFixed(4) : Math.round(s.temperature);
+    if (v === undefined && state.resp && state.resp.engine === state.engine && target.fromResult) {
+      try { v = target.fromResult(state.resp.results); } catch (e) { v = undefined; }
     }
     setPath(cfg(), target.field.path, v ?? target.field.value);
     renderForm();
@@ -234,9 +304,38 @@ function bindForm() {
     if (z === undefined) { flashBanner('warn', 'Enter an altitude first.'); return; }
     const a = await api(`/api/isa?altitude_km=${z}`);
     if (a.error) { flashBanner('warn', `ISA: ${a.error}.`); return; }
-    setPath(cfg(), ['airProperties', 'temperature'], +a.temperature.toFixed(2));
-    setPath(cfg(), ['airProperties', 'pressure'], +a.pressure.toFixed(1));
-    setPath(cfg(), ['airProperties', 'density'], +a.density.toFixed(4));
+    if (isRocket()) {
+      setPath(cfg(), ['ambientProperties', 'pressure'], +a.pressure.toFixed(1));
+    } else {
+      setPath(cfg(), ['airProperties', 'temperature'], +a.temperature.toFixed(2));
+      setPath(cfg(), ['airProperties', 'pressure'], +a.pressure.toFixed(1));
+      setPath(cfg(), ['airProperties', 'density'], +a.density.toFixed(4));
+    }
+    renderForm();
+    runNow();
+  }));
+
+  $$('#form [data-add-layer]').forEach(btn => btn.addEventListener('click', () => {
+    const g = GROUPS[btn.dataset.addLayer];
+    const keys = layerKeys(g);
+    const block = getPath(cfg(), g.layers.path);
+    // the new layer starts as a copy of the last one
+    block[`${g.layers.prefix}${keys.length + 1}`] = clone(block[keys[keys.length - 1]]);
+    renderForm();
+    runNow();
+  }));
+
+  $$('#form [data-remove-layer]').forEach(btn => btn.addEventListener('click', () => {
+    const [id, key] = btn.dataset.removeLayer.split(':');
+    const g = GROUPS[id];
+    delete getPath(cfg(), g.layers.path)[key];
+    renumberLayers(g);
+    renderForm();
+    runNow();
+  }));
+
+  $$('#form [data-vacuum]').forEach(btn => btn.addEventListener('click', () => {
+    setPath(cfg(), ['ambientProperties', 'pressure'], 0);
     renderForm();
     runNow();
   }));
@@ -290,12 +389,13 @@ async function runNow() {
   state.resp = r;
   showIssues(r.issues);
   renderResults();
-  // the optional α placeholder shows the computed optimum
-  const opt = $('#form input[data-optional]');
-  if (opt && opt.checked && r.results.propeller) {
+  // optional inputs that are off show the computed value (optimal α, adapted ε)
+  $$('#form input[data-optional]').forEach(opt => {
+    const f = fieldAt(opt.dataset.optional);
     const inp = $(`#form input[data-path="${opt.dataset.optional}"]`);
-    if (inp) inp.placeholder = fmt(r.results.propeller.alpha_power, 4);
-  }
+    const v = optionalResult(f);
+    if (opt.checked && inp && v !== undefined) inp.placeholder = +(v / (f.scale || 1)).toPrecision(6);
+  });
 }
 
 const ISSUE_ICON = { error: '⛔', warning: '⚠️', info: 'ℹ️' };
@@ -381,15 +481,93 @@ function deltaChip(cur, base, higherIsBetter) {
   return `<span class="delta ${good ? 'good' : 'bad'}">${d > 0 ? '+' : ''}${d.toFixed(1)}%</span>`;
 }
 
+const kpiCard = (color, label, value, unit, sub, delta = '') =>
+  `<div class="kpi" style="--kc:${color}"><div class="k-label"><span>${label}</span>${delta}</div>
+   <div class="k-value">${value}<span class="k-unit">${unit}</span></div><div class="k-sub">${sub}</div></div>`;
+
+/* over-/under-expanded or adapted, from the exit and ambient pressures */
+function expansionState(res) {
+  const pe = res.mainNozzle.exit_pressure, pa = res.ambient_pressure;
+  if (pa === 0) return { key: 'vacuum', label: 'vacuum' };
+  if (Math.abs(pe - pa) / pa < 0.01) return { key: 'adapted', label: 'adapted' };
+  return pe < pa ? { key: 'over', label: 'over-expanded' } : { key: 'under', label: 'under-expanded' };
+}
+
+function renderRocketKPIs() {
+  const r = state.resp, res = r.results, p = res.performance, g = res.geometry, noz = res.mainNozzle;
+  const b = state.baseline && state.baseline.engine === r.engine ? state.baseline.results : null;
+  const d = (cur, base, up) => (b ? deltaChip(cur, base, up) : '');
+  const exp = expansionState(res);
+
+  let html = kpiCard('#2563eb', 'Thrust', fmt(p.thrust / 1000, 2), 'kN', `vacuum ${fmt(p.thrust_vacuum / 1000, 2)} kN`,
+    d(p.thrust, b && b.performance.thrust, true));
+  html += kpiCard('#7c3aed', 'Specific impulse', fmt(p.Isp, 1), 's', `vacuum ${fmt(p.Isp_vacuum, 1)} s · c = ${fmt(p.effective_velocity, 0)} m/s`,
+    d(p.Isp, b && b.performance.Isp, true));
+  html += kpiCard('#f97316', 'Thrust coefficient', fmt(p.CF, 4), 'C<sub>F</sub>', `vacuum ${fmt(p.CF_vacuum, 4)} · c* = ${fmt(p.c_star, 1)} m/s`,
+    d(p.CF, b && b.performance.CF, true));
+  html += kpiCard('#ef4444', 'Propellant flow', fmt(res.mass_flow, 2), 'kg/s',
+    res.mass_flow_oxidizer ? `ox ${fmt(res.mass_flow_oxidizer, 2)} · fuel ${fmt(res.mass_flow_fuel, 2)} kg/s` : 'O/F not given',
+    d(res.mass_flow, b && b.mass_flow, false));
+  html += kpiCard('#64748b', 'Nozzle exit', fmt(noz.mach, 2), 'Mach',
+    `u<sub>e</sub> = ${fmt(noz.velocity, 0)} m/s · p<sub>e</sub> = ${fmt(noz.exit_pressure / 1000, 1)} kPa
+     <span class="badge ${exp.key === 'over' ? 'hot' : ''}">${exp.label}</span>`);
+  html += kpiCard('#0ea5e9', 'Geometry', fmt(noz.area_ratio, 2), 'ε',
+    `D<sub>t</sub> = ${fmt(g.throat_diameter, 3)} m · D<sub>e</sub> = ${fmt(g.exit_diameter, 3)} m${noz.adapted ? ' · adapted' : ''}`);
+  $('#kpis').innerHTML = html;
+}
+
+function renderSolidKPIs() {
+  const r = state.resp, res = r.results, burn = res.burn, h = burn.history, noz = res.mainNozzle;
+  const b = state.baseline && state.baseline.engine === r.engine ? state.baseline.results.burn : null;
+  const d = (cur, key, up) => (b ? deltaChip(cur, b[key], up) : '');
+  const pe = h.exit_pressure, pa = res.ambient_pressure;
+  const exp = pa === 0 ? 'vacuum' : Math.max(...pe) < 0.99 * pa ? 'over-expanded' : Math.min(...pe) > 1.01 * pa ? 'under-expanded' : 'crosses pₐ';
+
+  let html = kpiCard('#2563eb', 'Total impulse', fmt(burn.total_impulse / 1000, 1), 'kN·s',
+    `I<sub>sp</sub> = ${fmt(burn.Isp, 1)} s · m<sub>p</sub> = ${fmt(res.grain.propellant_mass, 1)} kg`, d(burn.total_impulse, 'total_impulse', true));
+  html += kpiCard('#7c3aed', 'Burn time', fmt(burn.burn_time, 2), 's', `web ${fmt(res.grain.web * 1000, 1)} mm`, d(burn.burn_time, 'burn_time', true));
+  html += kpiCard('#0ea5e9', 'Thrust', fmt(burn.average_thrust / 1000, 2), 'kN', `average · max ${fmt(burn.max_thrust / 1000, 2)} kN`,
+    d(burn.average_thrust, 'average_thrust', true));
+  html += kpiCard('#ef4444', 'Chamber pressure', fmt(burn.max_pressure / 1e6, 2), 'MPa',
+    `max · average ${fmt(burn.average_pressure / 1e6, 2)} · min ${fmt(burn.min_pressure / 1e6, 2)}`, d(burn.max_pressure, 'max_pressure', false));
+  html += kpiCard('#d97706', 'Burn area ratio', fmt(h.Kn[0], 0), 'Kn₀',
+    `A<sub>b</sub> max/min = ${fmt(Math.max(...h.burn_area) / Math.min(...h.burn_area), 3)} · A<sub>p</sub>/A<sub>t</sub> = ${fmt(res.grain.port_to_throat, 2)}`);
+  html += kpiCard('#64748b', 'Nozzle exit', fmt(noz.mach, 2), 'Mach',
+    `p<sub>e</sub> = ${fmt(Math.min(...pe) / 1000, 1)}–${fmt(Math.max(...pe) / 1000, 1)} kPa
+     <span class="badge ${exp === 'over-expanded' ? 'hot' : ''}">${exp}</span>`);
+  $('#kpis').innerHTML = html;
+}
+
+function renderEndBurnerKPIs() {
+  const r = state.resp, res = r.results, burn = res.burn, ph = res.phases, noz = res.mainNozzle;
+  const b = state.baseline && state.baseline.engine === r.engine ? state.baseline.results.burn : null;
+  const d = (cur, key, up) => (b ? deltaChip(cur, b[key], up) : '');
+  const seq = (key, scale, digits) => ph.map(p => fmt(p[key] / scale, digits)).join(' → ');
+  const pe = burn.history.exit_pressure, pa = res.ambient_pressure;
+  const exp = pa === 0 ? 'vacuum' : Math.max(...pe) < 0.99 * pa ? 'over-expanded' : Math.min(...pe) > 1.01 * pa ? 'under-expanded' : 'crosses pₐ';
+
+  let html = kpiCard('#2563eb', 'Total impulse', fmt(burn.total_impulse / 1000, 2), 'kN·s',
+    `I<sub>sp</sub> = ${fmt(burn.Isp, 1)} s · m<sub>p</sub> = ${fmt(res.grain.propellant_mass, 2)} kg`, d(burn.total_impulse, 'total_impulse', true));
+  html += kpiCard('#7c3aed', 'Burn time', fmt(burn.burn_time, 2), 's', `phases ${seq('burn_time', 1, 2)} s`, d(burn.burn_time, 'burn_time', true));
+  html += kpiCard('#0ea5e9', 'Thrust', fmt(burn.max_thrust / 1000, 3), 'kN', `max · phases ${seq('thrust', 1000, 3)} kN`, d(burn.max_thrust, 'max_thrust', true));
+  html += kpiCard('#ef4444', 'Chamber pressure', fmt(burn.max_pressure / 1e6, 2), 'MPa', `max · phases ${seq('pressure', 1e6, 2)} MPa`,
+    d(burn.max_pressure, 'max_pressure', false));
+  html += kpiCard('#d97706', 'Burn area ratio', fmt(res.grain.Kn, 1), 'Kn', `A<sub>b</sub> = πD²/4 = ${fmt(res.grain.initial_burn_area, 5)} m² · r ${seq('burn_rate', 1e-3, 2)} mm/s`);
+  html += kpiCard('#64748b', 'Nozzle exit', fmt(noz.mach, 2), 'Mach',
+    `p<sub>e</sub> = ${seq('exit_pressure', 1000, 1)} kPa <span class="badge ${exp === 'over-expanded' ? 'hot' : ''}">${exp}</span>`);
+  $('#kpis').innerHTML = html;
+}
+
 function renderKPIs() {
+  if (state.resp.engine === 'endBurner') { renderEndBurnerKPIs(); return; }
+  if (state.resp.engine === 'solidRocket') { renderSolidKPIs(); return; }
+  if (isRocket(state.resp.engine)) { renderRocketKPIs(); return; }
   const r = state.resp, res = r.results, p = res.performance, D = derived(r);
   const b = state.baseline && state.baseline.engine === r.engine ? state.baseline : null;
   const bp = b ? b.results.performance : {}, bD = b ? derived(b) : {};
   const tp = r.engine === 'turboprop';
 
-  const card = (color, label, value, unit, sub, delta = '') =>
-    `<div class="kpi" style="--kc:${color}"><div class="k-label"><span>${label}</span>${delta}</div>
-     <div class="k-value">${value}<span class="k-unit">${unit}</span></div><div class="k-sub">${sub}</div></div>`;
+  const card = kpiCard;
 
   const noz = res.mainNozzle;
   const nozKind = noz.onlyConvergent ? `<span class="badge">convergent · ${noz.mach < 0.999 ? 'not choked' : 'choked'}</span>`
@@ -522,14 +700,8 @@ function isobar(s, gas, sFrom, sTo) {
   return { xs, ys };
 }
 
-function renderTS() {
-  const r = state.resp, res = r.results;
-  const muted = cssVar('--muted'), accent = cssVar('--accent');
-  const { core, bypass } = processPaths(r);
-  const traces = [];
-
-  // isobars through the key states
-  const byName = Object.fromEntries(res.stations.map(s => [s.name, s]));
+/* isobars through the key states of an air-breathing cycle */
+function airIsobars(res, byName) {
   const airSt = res.stations.filter(s => s.gas === 'air');
   const sAirMax = Math.max(...airSt.map(s => s.entropy));
   const pMaxAir = airSt.reduce((a, s) => (s.pressure > a.pressure ? s : a), airSt[0]);
@@ -541,6 +713,32 @@ function renderTS() {
   ];
   const burner = byName['Combustor'];
   if (burner) isos.push({ s: burner, from: burner.entropy - 700, to: burner.entropy + 120, label: `p${burner.number}` });
+  return isos;
+}
+
+/* isobars p_c, p_e and (if not vacuum) p_a; the ambient one is drawn through the exit entropy */
+function rocketIsobars(res, byName) {
+  const c = byName['Chamber'], e = byName['Nozzle exit'];
+  const span = Math.max(200, e.entropy * 4);
+  const iso = (s, label) => ({ s, from: -span / 2, to: e.entropy + span / 2, label });
+  const isos = [iso(c, 'pc'), iso(e, 'pe')];
+  const pa = res.ambient_pressure;
+  if (pa > 0 && Math.abs(pa - e.pressure) / pa > 0.02) {
+    const g = res.gases.hot;
+    const Ta = e.temperature * Math.pow(pa / e.pressure, g.R / g.cp_s);
+    isos.push(iso({ temperature: Ta, entropy: e.entropy, pressure: pa, gas: 'hot' }, 'pa'));
+  }
+  return isos;
+}
+
+function renderTS() {
+  const r = state.resp, res = r.results;
+  const muted = cssVar('--muted'), accent = cssVar('--accent');
+  const { core, bypass } = processPaths(r);
+  const traces = [];
+
+  const byName = Object.fromEntries(res.stations.map(s => [s.name, s]));
+  const isos = isRocket(r.engine) ? rocketIsobars(res, byName) : airIsobars(res, byName);
 
   isos.forEach((iso, i) => {
     const { xs, ys } = isobar(iso.s, res.gases[iso.s.gas], iso.from, iso.to);
@@ -585,7 +783,50 @@ function renderTS() {
   }), PLOT_CFG);
 }
 
+/* isentropic quasi-1D flow along the drawn contour, with the solver stations on top */
+function renderRocketProfiles() {
+  const res = state.resp.results;
+  const g = res.gases.hot.gamma;
+  const rt = res.geometry.throat_diameter / 2;
+  const { pts } = rocketContour(res.mainNozzle.area_ratio);
+  const xs = [], M = [], P = [], T = [];
+  for (const q of pts) {
+    const m = q.part === 'chamber' ? machFromArea(q.r * q.r, g, false) : machFromArea(q.r * q.r, g, q.part === 'divergent');
+    const tau = 1 + (g - 1) / 2 * m * m;
+    xs.push(q.x * rt); M.push(m); T.push(1 / tau); P.push(Math.pow(tau, -g / (g - 1)));
+  }
+  const by = Object.fromEntries(res.stations.map(s => [s.name, s]));
+  const c = by['Chamber'], st = ['Chamber', 'Throat', 'Nozzle exit'].map(n => by[n]);
+  const stX = [xs[0], 0, xs[xs.length - 1]];
+  const muted = cssVar('--muted');
+  const traces = [
+    { x: xs, y: P, name: 'p / pc', mode: 'lines', line: { color: cssVar('--accent'), width: 3 } },
+    { x: xs, y: T, name: 'T / Tc', mode: 'lines', line: { color: '#f97316', width: 3 } },
+    { x: xs, y: M, name: 'Mach', yaxis: 'y2', mode: 'lines', line: { color: '#64748b', width: 2, dash: 'dot' } },
+    { x: stX, y: st.map(s => s.pressure / c.pressure), name: 'stations (solver)', mode: 'markers+text',
+      text: st.map(s => String(s.number)), textposition: 'top right', marker: { size: 9, color: cssVar('--accent') },
+      customdata: st.map(s => [s.name, s.pressure / 1000, s.temperature]),
+      hovertemplate: '<b>%{customdata[0]}</b><br>p = %{customdata[1]:.2f} kPa<br>T = %{customdata[2]:.1f} K<extra></extra>' },
+  ];
+  const shapes = [];
+  if (res.ambient_pressure > 0) {
+    const ya = res.ambient_pressure / c.pressure;
+    shapes.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: ya, y1: ya, line: { color: muted, dash: 'dash', width: 1.5 } });
+    traces.push({ x: [xs[xs.length - 1]], y: [ya], mode: 'text', text: ['pa / pc'], textposition: 'bottom left',
+      textfont: { color: muted, size: 11 }, hoverinfo: 'skip', showlegend: false });
+  }
+  Plotly.react('profilePlot', traces, baseLayout({
+    xaxis: { title: { text: 'axial position from the throat  [m]' } },
+    yaxis: { title: { text: 'p / pc ,  T / Tc' }, type: 'log', exponentformat: 'power' },
+    yaxis2: { title: { text: 'Mach' }, rangemode: 'tozero' },
+    margin: { l: 70, r: 60, t: 10, b: 60 },
+    legend: { orientation: 'h', y: 1.1, x: 0 },
+    shapes,
+  }), PLOT_CFG);
+}
+
 function renderProfiles() {
+  if (isRocket(state.resp.engine)) { renderRocketProfiles(); return; }
   const res = state.resp.results;
   const st = res.stations.slice().sort((a, b) => a.number - b.number);
   const labels = st.map(s => `${s.number} ${s.name.replace('Turbine LP | Propeller', 'LPT | Prop').replace('Air at entrance', 'Entry')}`);
@@ -640,7 +881,72 @@ function renderEnergy() {
     <p class="hint">η<sub>th</sub> = (P<sub>p</sub> + P<sub>d</sub>) / P<sub>f</sub> · η<sub>p</sub> = P<sub>p</sub> / (P<sub>p</sub> + P<sub>d</sub>)</p>`;
 }
 
-const PLOTS = ['tsPlot', 'profilePlot', 'sankeyPlot'];
+/* the closed-form values of every phase, as in a hand solution */
+function phaseTable(phases) {
+  const rows = phases.map((p, i) => `<tr>
+    <td><span class="num" style="background:${LAYER_COLORS[i % LAYER_COLORS.length]};color:#1f2937">${p.layer}</span></td>
+    <td>${fmt(p.length, 3)}</td><td>${fmt(p.c_star, 1)}</td><td>${fmt(p.pressure / 1e6, 4)}</td><td>${fmt(p.burn_rate * 1000, 3)}</td>
+    <td>${fmt(p.start, 3)}–${fmt(p.start + p.burn_time, 3)}</td><td>${fmt(p.mass_flow, 4)}</td><td>${fmt(p.CF, 4)}</td>
+    <td>${fmt(p.thrust / 1000, 4)}</td><td>${fmt(p.impulse / 1000, 3)}</td><td>${fmt(p.mass, 3)}</td><td>${fmt(p.Isp, 1)}</td></tr>`).join('');
+  return `<table><thead><tr><th>Layer</th><th>L [m]</th><th>c* [m/s]</th><th>p<sub>c</sub> [MPa]</th><th>r [mm/s]</th><th>t [s]</th>
+    <th>ṁ [kg/s]</th><th>C<sub>F</sub></th><th>F [kN]</th><th>I [kN·s]</th><th>m<sub>p</sub> [kg]</th><th>I<sub>sp</sub> [s]</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+/* p_c(t), F(t) and the grain design curve A_b(x), Kn(x) */
+function renderBurn() {
+  const r = state.resp, h = r.results.burn.history;
+  const tEnd = h.time[h.time.length - 1];
+  // the burn stops when the web is consumed: draw the drop to zero
+  const t = [...h.time, tEnd], drop = arr => [...arr, 0];
+  const base = state.baseline && state.baseline.engine === r.engine ? state.baseline.results.burn.history : null;
+  const traces = [
+    { x: t, y: drop(h.pressure.map(p => p / 1e6)), name: 'pc [MPa]', mode: 'lines', line: { color: '#ef4444', width: 3 } },
+    { x: t, y: drop(h.thrust.map(f => f / 1000)), name: 'F [kN]', yaxis: 'y2', mode: 'lines', line: { color: '#2563eb', width: 3 } },
+  ];
+  if (base) {
+    const tb = [...base.time, base.time[base.time.length - 1]];
+    traces.push({ x: tb, y: [...base.pressure.map(p => p / 1e6), 0], name: 'baseline pc', mode: 'lines', line: { color: cssVar('--muted'), width: 2, dash: 'dash' } });
+    traces.push({ x: tb, y: [...base.thrust.map(f => f / 1000), 0], name: 'baseline F', yaxis: 'y2', mode: 'lines', line: { color: cssVar('--muted'), width: 2, dash: 'dot' } });
+  }
+  // layered grains: one band per phase
+  const phases = r.results.phases || [];
+  const bands = phases.map((p, i) => ({ type: 'rect', xref: 'x', yref: 'paper', x0: p.start, x1: p.start + p.burn_time, y0: 0, y1: 1,
+    fillcolor: LAYER_COLORS[i % LAYER_COLORS.length], opacity: 0.18, line: { width: 0 }, layer: 'below' }));
+  const notes = phases.map(p => ({ xref: 'x', yref: 'paper', x: p.start + p.burn_time / 2, y: 1, yanchor: 'bottom', showarrow: false,
+    text: `layer ${p.layer}`, font: { size: 11, color: cssVar('--muted') } }));
+  Plotly.react('burnPlot1', traces, baseLayout({
+    xaxis: { title: { text: 'time  [s]' } }, yaxis: { title: { text: 'chamber pressure  [MPa]' }, rangemode: 'tozero' },
+    yaxis2: { title: { text: 'thrust  [kN]' }, rangemode: 'tozero' },
+    margin: { l: 60, r: 60, t: phases.length ? 24 : 10, b: 50 }, legend: { orientation: 'h', y: 1.18 },
+    shapes: bands, annotations: notes,
+  }), PLOT_CFG);
+
+  $('#phaseTable').innerHTML = phases.length ? phaseTable(phases) : '';
+  if (phases.length) {
+    // burnt length and regression rate: the burn area is constant
+    Plotly.react('burnPlot2', [
+      { x: h.time, y: h.web.map(x => x * 1000), name: 'burnt length [mm]', mode: 'lines', line: { color: '#d97706', width: 3 } },
+      { x: h.time, y: h.burn_rate.map(v => v * 1000), name: 'r [mm/s]', yaxis: 'y2', mode: 'lines', line: { color: '#64748b', width: 2, dash: 'dot' } },
+    ], baseLayout({
+      xaxis: { title: { text: 'time  [s]' } }, yaxis: { title: { text: 'burnt length  [mm]' }, rangemode: 'tozero' },
+      yaxis2: { title: { text: 'regression rate  [mm/s]' }, rangemode: 'tozero' },
+      margin: { l: 60, r: 60, t: 24, b: 50 }, legend: { orientation: 'h', y: 1.18 }, shapes: bands, annotations: notes,
+    }), PLOT_CFG);
+    return;
+  }
+
+  const xs = h.web.map(x => x * 1000);
+  Plotly.react('burnPlot2', [
+    { x: xs, y: h.burn_area, name: 'Ab [m²]', mode: 'lines', line: { color: '#d97706', width: 3 } },
+    { x: xs, y: h.Kn, name: 'Kn = Ab/At', yaxis: 'y2', mode: 'lines', line: { color: '#64748b', width: 2, dash: 'dot' } },
+  ], baseLayout({
+    xaxis: { title: { text: 'burnt web x  [mm]' } }, yaxis: { title: { text: 'burn area  [m²]' } },
+    yaxis2: { title: { text: 'Kn' } },
+    margin: { l: 60, r: 60, t: 10, b: 50 }, legend: { orientation: 'h', y: 1.12 },
+  }), PLOT_CFG);
+}
+
+const PLOTS = ['tsPlot', 'profilePlot', 'sankeyPlot', 'burnPlot1', 'burnPlot2'];
 
 function plotlyMissing() {
   if (window.Plotly) return false;
@@ -673,7 +979,8 @@ function renderResults() {
   if (plotlyMissing()) return;
   safely('T-s', renderTS);
   safely('profiles', renderProfiles);
-  safely('energy', renderEnergy);
+  if (!isRocket(r.engine)) safely('energy', renderEnergy);
+  if (BURN_ENGINES.includes(r.engine)) safely('burn', renderBurn);
   safely('sweep', updateSweepMarker);
 }
 
@@ -682,6 +989,11 @@ function sweepableFields() {
   const out = [];
   for (const id of ENGINES[state.engine].groups) {
     const g = GROUPS[id];
+    if (g.layers) {
+      layerKeys(g).forEach((key, i) => g.fields.forEach(f => f.path && !f.blank &&
+        out.push({ f: layerField(f, key), group: `${g.title} ${i + 1}` })));
+      continue;
+    }
     if (!groupActive(g)) continue;
     const list = [];
     if (g.modes) list.push(activeMode(g).field);
@@ -697,7 +1009,7 @@ function refreshSweepParams() {
   const prev = sel.value;
   sel.innerHTML = sweepableFields().map(({ f, group }) =>
     `<option value="${f.path.join('.')}">${group} — ${f.label} (${f.sym})</option>`).join('');
-  const preferred = ['components.compressor.pressure_ratio'];
+  const preferred = [ENGINES[state.engine].sweepDefault || 'components.compressor.pressure_ratio'];
   if ([...sel.options].some(o => o.value === prev)) { sel.value = prev; return; }
   if ([...sel.options].some(o => o.value === preferred[0])) sel.value = preferred[0];
   setSweepRange();
@@ -706,7 +1018,7 @@ function refreshSweepParams() {
 function setSweepRange() {
   const key = $('#sweepParam').value;
   if (!key) return;
-  const f = FIELD_INDEX[key];
+  const f = fieldAt(key);
   const scale = f.scale || 1;
   let v = getPath(cfg(), key.split('.'));
   if (v === undefined) v = f.def !== undefined ? f.def : 1;
@@ -723,7 +1035,7 @@ let lastSweep = null;
 async function runSweep() {
   const key = $('#sweepParam').value;
   if (!key) return;
-  const f = FIELD_INDEX[key];
+  const f = fieldAt(key);
   const scale = f.scale || 1;
   const a = parseFloat($('#sweepFrom').value), b = parseFloat($('#sweepTo').value);
   const n = Math.max(3, Math.min(200, parseInt($('#sweepN').value, 10) || 25));
@@ -734,10 +1046,12 @@ async function runSweep() {
   btn.disabled = true; btn.textContent = 'Running…';
   try {
     const r = await api('/api/sweep', { config: cfg(), path: key.split('.'), values });
-    const good = r.points.filter(p => p.thrust != null);
-    lastSweep = { key, f, points: good.map(p => ({ ...p, x: p.x / scale })), engine: state.engine };
+    const good = r.points.filter(p => p.error == null);
+    lastSweep = { key, f, points: good.map(p => ({ ...p, x: p.x / scale })), engine: state.engine,
+      // a rocket sized by thrust keeps it fixed: the propellant flow is what changes
+      fixedThrust: isRocket() && hasPath(cfg(), ['components', 'chamber', 'thrust']) };
     plotSweep();
-    const skipped = r.points.filter(p => p.thrust == null);
+    const skipped = r.points.filter(p => p.error != null);
     $('#sweepNote').textContent = skipped.length
       ? `${skipped.length} of ${r.points.length} points skipped (not physical), e.g. at ${fmt(skipped[0].x / scale, 3)}: ${skipped[0].error.split('\n')[0]}`
       : `${good.length} points computed.`;
@@ -754,11 +1068,53 @@ function sweepMarkerShapes() {
     line: { color: cssVar('--muted'), dash: 'dot', width: 1.5 } }];
 }
 
+function plotSolidSweep(xs, xTitle, shapes) {
+  const { points } = lastSweep;
+  const line = (y, name, color, extra = {}) => ({ x: xs, y, name, mode: 'lines+markers', line: { color, width: 3 }, marker: { size: 5 }, ...extra });
+  const layout = (y1, y2) => baseLayout({
+    xaxis: { title: { text: xTitle } }, yaxis: { title: { text: y1 }, rangemode: 'tozero' }, yaxis2: { title: { text: y2 }, rangemode: 'tozero' },
+    margin: { l: 60, r: 60, t: 10, b: 50 }, legend: { orientation: 'h', y: 1.1 }, shapes,
+  });
+  Plotly.react('sweepPlot1', [
+    line(points.map(p => p.average_thrust / 1000), 'average thrust [kN]', '#2563eb'),
+    line(points.map(p => p.burn_time), 'burn time [s]', '#7c3aed', { yaxis: 'y2' }),
+  ], layout('thrust [kN]', 'burn time [s]'), PLOT_CFG);
+  Plotly.react('sweepPlot2', [
+    line(points.map(p => p.max_pressure / 1e6), 'max pc [MPa]', '#ef4444'),
+    line(points.map(p => p.average_pressure / 1e6), 'average pc [MPa]', '#ef4444', { mode: 'lines', line: { color: '#ef4444', width: 2, dash: 'dash' } }),
+    line(points.map(p => p.Isp), 'Isp [s]', '#f97316', { yaxis: 'y2', mode: 'lines' }),
+  ], layout('chamber pressure [MPa]', 'Isp [s]'), PLOT_CFG);
+}
+
+function plotRocketSweep(xs, xTitle, shapes) {
+  const { points } = lastSweep;
+  const line = (y, name, color, extra = {}) => ({ x: xs, y, name, mode: 'lines+markers', line: { color, width: 3 }, marker: { size: 5 }, ...extra });
+  const layout = (y1, y2) => baseLayout({
+    xaxis: { title: { text: xTitle } }, yaxis: { title: { text: y1 } }, yaxis2: { title: { text: y2 } },
+    margin: { l: 60, r: 60, t: 10, b: 50 }, legend: { orientation: 'h', y: 1.1 }, shapes,
+  });
+  const size = lastSweep.fixedThrust
+    ? { y: points.map(p => p.mass_flow), name: 'Propellant flow [kg/s]', axis: 'mass flow [kg/s]' }
+    : { y: points.map(p => p.thrust / 1000), name: 'Thrust [kN]', axis: 'thrust [kN]' };
+  Plotly.react('sweepPlot1', [
+    line(size.y, size.name, '#2563eb'),
+    line(points.map(p => p.Isp), 'Isp [s]', '#7c3aed', { yaxis: 'y2' }),
+    line(points.map(p => p.Isp_vacuum), 'Isp vacuum [s]', '#7c3aed', { yaxis: 'y2', line: { color: '#7c3aed', width: 2, dash: 'dash' }, mode: 'lines' }),
+  ], layout(size.axis, 'Isp [s]'), PLOT_CFG);
+  Plotly.react('sweepPlot2', [
+    line(points.map(p => p.CF), 'C_F', '#f97316', { mode: 'lines' }),
+    line(points.map(p => p.CF_vacuum), 'C_F vacuum', '#f97316', { mode: 'lines', line: { color: '#f97316', width: 2, dash: 'dash' } }),
+    line(points.map(p => p.mach), 'exit Mach', '#64748b', { yaxis: 'y2', mode: 'lines', line: { color: '#64748b', width: 2, dash: 'dot' } }),
+  ], layout('thrust coefficient', 'Mach'), PLOT_CFG);
+}
+
 function plotSweep() {
   if (!lastSweep) return;
   const { f, points } = lastSweep;
   const xs = points.map(p => p.x);
   const xTitle = `${f.label} ${f.sym} [${f.unit}]`;
+  if (BURN_ENGINES.includes(lastSweep.engine)) { plotSolidSweep(xs, xTitle, sweepMarkerShapes()); return; }
+  if (isRocket(lastSweep.engine)) { plotRocketSweep(xs, xTitle, sweepMarkerShapes()); return; }
   const tp = lastSweep.engine === 'turboprop';
   const shapes = sweepMarkerShapes();
   Plotly.react('sweepPlot1', [
@@ -886,6 +1242,8 @@ async function init() {
   const saved = params.get('engine') || storage('projet.engine');
   state.engine = saved && ENGINES[saved] && state.presets[saved] ? saved : 'turbojet';
   renderEngineSwitch();
+  renderFamilyViews();
+  if (BURN_ENGINES.includes(state.engine)) $('#tabs button[data-tab="burn"]').click();
   renderForm();
   runNow();
 }

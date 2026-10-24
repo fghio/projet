@@ -16,7 +16,7 @@ sys.path.insert(0, root_dir)
 
 from engineCycle import parse_openfoam_style, run_engine
 from src.write.exerciseText import generate_exercise_text, generate_data_section
-from gui.validation import ENGINE_TYPES, diagnose
+from gui.validation import ENGINE_TYPES, ROCKET_TYPES, diagnose
 
 from src.fluids.air import Air
 from src.fluids.fuel import Fuel
@@ -73,6 +73,13 @@ def station_topology(engine_type, has_postcomb):
             "PostCombustor":   (9, "post", "Mixing zone"),
             "Nozzle":          (10, "post" if has_postcomb else "mix", "PostCombustor" if has_postcomb else "Mixing zone"),
         }
+    if engine_type in ROCKET_TYPES:
+        # for a solid motor: state at the maximum chamber pressure
+        return {
+            "Chamber":     (1, "hot", None),
+            "Throat":      (2, "hot", "Chamber"),
+            "Nozzle exit": (3, "hot", "Throat"),
+        }
     if engine_type == "turboprop":
         return {
             "Air at entrance":        (1, "air", "Ambient"),
@@ -86,7 +93,21 @@ def station_topology(engine_type, has_postcomb):
     raise ValueError(f"Unknown engine type '{engine_type}'")
 
 
+def rocket_gas(config):
+    """combustion products of a rocket: cp from γ and R when not given (as in the solver)"""
+    props = dict(config.get('hotGasProperties', {}))
+    if 'cp' not in props:
+        props['cp'] = props['gamma'] * props['R'] / (props['gamma'] - 1)
+    return HotGas(**props)
+
+
 def gas_properties(config, results):
+    if config["engineType"] in ROCKET_TYPES:
+        # layered grains: the stations belong to one layer, with its own products
+        gases = {"hot": HotGas(**results["station_gas"]) if "station_gas" in results else rocket_gas(config)}
+        return {k: {"cp": g.cp, "R": g.R, "gamma": g.gamma, "cp_s": g.gamma * g.R / (g.gamma - 1)}
+                for k, g in gases.items()}
+
     air = Air(**config.get('airProperties', {}))
     hot = HotGas(**config.get('hotGasProperties', {}))
     post = HotGas(**config.get('postcombustionProperties', {}))
@@ -107,22 +128,31 @@ def gas_properties(config, results):
 
 
 def enrich_stations(config, results):
-    """Add station number, gas and entropy (s = 0 at ambient static conditions)."""
+    """Add station number, gas and entropy (s = 0 at ambient static conditions,
+    or at the chamber state for a rocket, which takes in no air)."""
     comps = config["components"]
     topology = station_topology(config["engineType"], "postCombustor" in comps)
     gases = gas_properties(config, results)
 
-    air_props = config.get('airProperties', {})
-    ambient = {
-        "name": "Ambient", "number": 0, "gas": "air", "parent": None,
-        "pressure": air_props["pressure"], "temperature": air_props["temperature"],
-        "total": False, "entropy": 0.0,
-    }
-    stations = [ambient]
-    by_name = {"Ambient": ambient}
+    stations = []
+    by_name = {}
+    if config["engineType"] not in ROCKET_TYPES:
+        air_props = config.get('airProperties', {})
+        ambient = {
+            "name": "Ambient", "number": 0, "gas": "air", "parent": None,
+            "pressure": air_props["pressure"], "temperature": air_props["temperature"],
+            "total": False, "entropy": 0.0,
+        }
+        stations.append(ambient)
+        by_name["Ambient"] = ambient
 
     for st in results["stations"]:
         number, gas, parent = topology[st["name"]]
+        if parent is None:
+            entry = dict(st, number=number, gas=gas, parent=None, entropy=0.0)
+            stations.append(entry)
+            by_name[st["name"]] = entry
+            continue
         up = by_name[parent]
         g = gases[gas]
         # the solver's isentropic relations use γ: cp = γR/(γ-1) keeps adiabatic
@@ -270,7 +300,7 @@ def plotly_js():
 @app.route('/api/presets')
 def presets():
     out = {}
-    for engine in ENGINE_TYPES:
+    for engine in ENGINE_TYPES + ROCKET_TYPES:
         path = os.path.join(inputs_dir, f"input_{engine}")
         if os.path.isfile(path):
             with open(path) as f:
@@ -349,6 +379,36 @@ def api_sweep():
             points.append({"x": v, "error": summary(issues)})
             continue
         perf = res["performance"]
+        if "burn" in res:
+            burn = res["burn"]
+            points.append(to_builtin({
+                "x": v,
+                "total_impulse": burn["total_impulse"],
+                "burn_time": burn["burn_time"],
+                "average_thrust": burn["average_thrust"],
+                "max_thrust": burn["max_thrust"],
+                "average_pressure": burn["average_pressure"],
+                "max_pressure": burn["max_pressure"],
+                "Isp": burn["Isp"],
+                "propellant_mass": res["grain"]["propellant_mass"],
+                "warnings": sum(1 for i in issues if i["level"] == "warning"),
+            }))
+            continue
+        if cfg["engineType"] in ROCKET_TYPES:
+            points.append(to_builtin({
+                "x": v,
+                "thrust": perf["thrust"],
+                "thrust_vacuum": perf["thrust_vacuum"],
+                "Isp": perf["Isp"],
+                "Isp_vacuum": perf["Isp_vacuum"],
+                "CF": perf["CF"],
+                "CF_vacuum": perf["CF_vacuum"],
+                "mach": res["mainNozzle"]["mach"],
+                "exit_pressure": res["mainNozzle"]["exit_pressure"],
+                "mass_flow": res["mass_flow"],
+                "warnings": sum(1 for i in issues if i["level"] == "warning"),
+            }))
+            continue
         points.append(to_builtin({
             "x": v,
             "thrust": perf["thrust"],
@@ -371,7 +431,7 @@ def api_parse():
     text = (request.get_json(silent=True) or {}).get("text", "")
     try:
         config = parse_openfoam_style(text)
-        if config.get("engineType") not in ENGINE_TYPES:
+        if config.get("engineType") not in ENGINE_TYPES + ROCKET_TYPES:
             raise ValueError(f"engineType '{config.get('engineType')}' not supported")
         return jsonify({"ok": True, "config": config})
     except Exception as e:
