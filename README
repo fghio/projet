@@ -10,6 +10,11 @@
 Still missing:
 - Extend convergent only nozzle to separated fluxes
 
+Fuel:
+    fuelProperties { calorific 43e6; }   lower heating value in J/kg
+  Optional: if the block is missing the heating value is 42e6 J/kg. The same value is
+  used by the main combustor and the afterburner, and by ProJet Off-Design.
+
 Graphical interface:
     python3 projetGUI.py            (opens http://127.0.0.1:8050 in the browser)
     python3 projetGUI.py --port 9000 --no-browser
