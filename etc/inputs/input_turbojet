@@ -16,6 +16,11 @@ airProperties
     density 0.413;
 }
 
+fuelProperties
+{
+    calorific 42e6;
+}
+
 postcombustionProperties
 {
     gamma 1.3;
