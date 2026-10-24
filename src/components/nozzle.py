@@ -8,7 +8,8 @@ class Nozzle:
         air: Air,
         hotGas: HotGas,
         efficiency=1.0,
-        onlyConvergent = False
+        onlyConvergent = False,
+        area_ratio = None
     ):
         self.air = air
         self.hotGas = hotGas
@@ -21,6 +22,10 @@ class Nozzle:
         self.outlet_velocity = 0
         self.mach = 0
         self.onlyConvergent = bool(onlyConvergent)
+
+        # exit-to-throat area ratio of a convergent-divergent nozzle with given geometry
+        # (None: the nozzle is adapted, i.e. the flow expands down to ambient pressure)
+        self.area_ratio = area_ratio
 
         if self.onlyConvergent == True:
             self.mach = 1
@@ -42,6 +47,29 @@ class Nozzle:
         return self.outlet_velocity
 
     
+    @staticmethod
+    def supersonicMach(
+        area_ratio,
+        gamma
+    ):
+        # supersonic root of the isentropic area-Mach relation A/A* = f(M), by bisection
+        def areaFunction(mach):
+            return 1/mach * (2/(gamma+1) * (1 + (gamma-1)/2 * mach**2))**((gamma+1)/(2*(gamma-1)))
+
+        mach_low = 1.0
+        mach_high = 2.0
+        while areaFunction(mach_high) < area_ratio:
+            mach_high *= 2
+
+        for _ in range(200):
+            mach = 0.5 * (mach_low + mach_high)
+            if areaFunction(mach) < area_ratio:
+                mach_low = mach
+            else:
+                mach_high = mach
+
+        return 0.5 * (mach_low + mach_high)
+
     def totalToStatic(
         self, 
         inlet_temperature, 
@@ -60,6 +88,15 @@ class Nozzle:
         inlet_pressure
     ):
         self.static_pressure, self.static_temperature = self.totalToStatic(inlet_temperature, inlet_pressure)
+
+        if self.area_ratio is not None:
+            # convergent-divergent nozzle of given geometry: the isentropic exit Mach follows
+            # from the area ratio (no shock inside), so the exit pressure is generally not ambient
+            gamma = self.hotGas.gamma
+            mach_ideal = self.supersonicMach(self.area_ratio, gamma)
+            self.static_pressure = inlet_pressure * (1 + (gamma-1)/2 * mach_ideal**2)**(-gamma/(gamma-1))
+            static_temperature_ideal = inlet_temperature * (self.static_pressure / inlet_pressure) ** ((gamma-1)/gamma)
+            self.static_temperature = inlet_temperature - self.efficiency * (inlet_temperature - static_temperature_ideal)
 
         if self.onlyConvergent == True:
             # convergent nozzle
