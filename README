@@ -15,6 +15,50 @@ Fuel:
   Optional: if the block is missing the heating value is 42e6 J/kg. The same value is
   used by the main combustor and the afterburner, and by ProJet Off-Design.
 
+Rockets (endoreactors):
+    engineType idealRocket;          (example: etc/inputs/input_idealRocket)
+  - ambientProperties { pressure; }  ambient pressure in Pa, 0 = vacuum
+  - hotGasProperties { gamma; R; }   combustion products, required (cp = gamma R/(gamma-1) if omitted)
+  - chamber { pressure; temperature; mixture_ratio; }  p_c [Pa], T_c [K], O/F (optional)
+    plus exactly one of: thrust [N], mass_flow [kg/s], throat_diameter [m]
+  - nozzle { area_ratio; efficiency; }  Ae/At of the convergent-divergent nozzle;
+    without area_ratio the nozzle is adapted to ambient pressure (not allowed in vacuum)
+  Output: c*, throat and exit states, C_F, Isp (ambient and vacuum), mass flows, throat/exit diameters.
+  Over-expanded nozzles are checked for flow separation (Summerfield) and shocks inside the nozzle.
+  In the GUI pick "Rocket" in the top bar: thrust-chamber drawing to scale, T-s, p/T/Mach along the
+  nozzle (isentropic quasi-1D on a representative contour) and sweeps of Isp, C_F and exit Mach.
+
+Solid rocket motors:
+    engineType solidRocket;          (example: etc/inputs/input_solidRocket)
+  - propellantProperties { density; flame_temperature; burn_rate_coefficient; burn_rate_exponent; }
+    rho_p [kg/m3], T_c [K], burn rate r [mm/s] = a * p[MPa]^n
+  - hotGasProperties { gamma; R; }   as for idealRocket
+  - grain { segments; outer_diameter; core_diameter; segment_length; inhibited_ends; }  BATES grain [m],
+    outer surface bonded to the case; the end faces burn unless inhibited_ends True
+  - nozzle { throat_diameter; area_ratio; efficiency; }  the area ratio is required
+  Model (quasi-steady, no ignition transient, no tail-off, gas mass in the chamber neglected):
+    d = d0 + 2x,  L = L0 - 2x (L = L0 with inhibited ends)
+    Ab = N [pi d L + 2 pi/4 (D^2 - d^2)]          (end term only with burning ends)
+    web = min((D - d0)/2, L0/2)                   ((D - d0)/2 with inhibited ends)
+    c* = sqrt(R Tc / gamma) ((gamma+1)/2)^((gamma+1)/(2(gamma-1)))
+    Kn = Ab/At,  pc = (a rho_p c* Kn)^(1/(1-n))   (a in SI: a[mm/s] 1e-3 / (1e6)^n)
+    r = a pc^n,  dt = dx / r,  F = C_F pc At with the nozzle relations of idealRocket
+    I_tot = integral of F dt,  Isp = I_tot / (m_p g0),  m_p = rho_p N pi/4 (D^2 - d0^2) L0
+  The console prints Ab, At, Kn, pc, r and F at ignition for hand checks; the GUI stations,
+  T-s and nozzle profile refer to the maximum-pressure point.
+
+Cigarette (end-burning) grains with layers of different propellants:
+    engineType endBurner;            (example: etc/inputs/input_endBurner, boost + sustain)
+  - hotGasProperties { gamma; R; }   common combustion products
+  - grain { diameter; layer1 { ... } layer2 { ... } ... }  layer1 faces the nozzle and burns first
+    each layer: length; density; flame_temperature; burn_rate_coefficient; burn_rate_exponent;
+    optional gamma; R; cp (default: the common ones)
+  - nozzle { throat_diameter; area_ratio; efficiency; }
+  Quasi-steady phases, one per layer, with an instantaneous change of pressure between them:
+    Ab = pi D^2/4,  Kn = Ab/At,  pc_i = (a_i rho_i c*_i Kn)^(1/(1-n_i)),  r_i = a_i pc_i^n_i,
+    t_i = L_i / r_i,  F_i = C_F,i pc_i At,  I_tot = sum F_i t_i
+  The console and the GUI ("Burn history" table) list every phase for hand checks.
+
 Graphical interface:
     python3 projetGUI.py            (opens http://127.0.0.1:8050 in the browser)
     python3 projetGUI.py --port 9000 --no-browser
